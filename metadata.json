@@ -1,0 +1,6 @@
+{
+  "name": "Тишина",
+  "description": "Минималистичный цифровой детокс в стиле Material 3 с жёсткой блокировкой таймера и защитой от обхода.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,131 @@
+<resources>
+    <string name="app_name">Тишина</string>
+
+    <!-- Device Admin -->
+    <string name="device_admin_label">Блокировка удаления</string>
+    <string name="device_admin_description">Запрещает удаление приложения, пока активна защита.</string>
+    <string name="device_admin_disable_warning_active">Таймер активен. Отключение прав администратора доступно после завершения блокировки.</string>
+    <string name="device_admin_disable_warning_idle">После отключения приложение можно удалить.</string>
+    <string name="device_admin_prompt_explanation">Требуется для запрета удаления приложения во время активного таймера.</string>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_label">Контроль блокировки</string>
+    <string name="accessibility_service_description">Отслеживает запуск приложений и «Настроек» во время активного таймера и возвращает на экран блокировки. Содержимое экрана не читается.</string>
+
+    <!-- Header & Status -->
+    <string name="shield_status_ready">Готово</string>
+    <string name="shield_status_partial">Разрешения</string>
+
+    <!-- Main Setup Screen -->
+    <string name="timer_card_label">Таймер</string>
+    <string name="timer_ends_at">До %1$s</string>
+    <string name="timer_minus_five">−5 мин</string>
+    <string name="timer_plus_five">+5 мин</string>
+    <string name="timer_hours_short">%1$d ч</string>
+    <string name="timer_minutes_short">%1$d мин</string>
+    <string name="timer_hours_minutes_short">%1$d ч %2$d мин</string>
+
+    <!-- Detox Modes -->
+    <string name="mode_section_title">Режим</string>
+    <string name="mode_phone_title">Только звонки</string>
+    <string name="mode_phone_subtitle">Входящие и исходящие вызовы.</string>
+    <string name="mode_vacuum_title">Полная блокировка</string>
+    <string name="mode_vacuum_subtitle">Доступен только экстренный номер 112.</string>
+
+    <!-- Start & Confirm Sheet -->
+    <string name="start_silence_button">Заблокировать</string>
+    <string name="setup_before_start_button">Настроить разрешения</string>
+    <string name="confirm_sheet_title">Запустить блокировку?</string>
+    <string name="confirm_sheet_body">До %1$s (%2$s). Режим: %3$s. Отменить раньше срока нельзя.</string>
+    <string name="confirm_sheet_pinning_note">На время таймера заблокированы сторонние приложения, «Настройки» и удаление.</string>
+    <string name="confirm_hold_button">Удерживайте 2 сек</string>
+    <string name="confirm_holding_button">Удерживайте…</string>
+    <string name="confirm_cancel">Отмена</string>
+
+    <!-- Active Lockout Screen -->
+    <string name="lock_mode_badge_phone">Только звонки</string>
+    <string name="lock_mode_badge_vacuum">Полная блокировка</string>
+    <string name="lock_free_at">До %1$s</string>
+    <string name="lock_open_dialer">Телефон</string>
+    <string name="lock_emergency_call">Экстренный вызов 112</string>
+    <string name="lock_pin_screen_banner_title">Закрепление экрана выключено</string>
+    <string name="lock_pin_screen_banner_action">Закрепить</string>
+    <string name="lock_screen_pinned_badge">Закреплено</string>
+    <string name="lock_shield_active_badge">Заблокировано</string>
+    <string name="lock_tamper_notice">Системное время изменено. Отсчёт идёт по системному таймеру.</string>
+    <string name="lock_bypass_notice">Попыток выхода: %1$d</string>
+
+    <!-- Completion Screen -->
+    <string name="complete_title">Блокировка завершена</string>
+    <string name="complete_subtitle">Длительность: %1$s</string>
+    <string name="complete_return_button">Готово</string>
+    <string name="complete_bypasses_clean">Попыток выхода: 0</string>
+    <string name="complete_bypasses_count">Попыток выхода: %1$d</string>
+
+    <!-- Permissions Setup Screen -->
+    <string name="shield_screen_title">Разрешения</string>
+    <string name="shield_screen_intro">Системные права для блокировки приложений, «Настроек» и удаления. Вне активного таймера их можно отключить.</string>
+    <string name="shield_step_accessibility_title">Специальные возможности</string>
+    <string name="shield_step_accessibility_desc">Блокирует запуск приложений и «Настроек» во время таймера. Текст на экране не читается.</string>
+    <string name="shield_step_admin_title">Администратор устройства</string>
+    <string name="shield_step_admin_desc">Запрещает удаление приложения.</string>
+    <string name="shield_step_notifications_title">Уведомления</string>
+    <string name="shield_step_notifications_desc">Фоновый таймер и восстановление после перезагрузки.</string>
+    <string name="shield_step_battery_title">Без ограничений батареи</string>
+    <string name="shield_step_battery_desc">Не даёт системе остановить фоновый таймер.</string>
+    <string name="shield_step_dnd_title">Не беспокоить</string>
+    <string name="shield_step_dnd_desc">Отключает уведомления на время блокировки.</string>
+    <string name="shield_option_block_shade_title">Блокировать шторку и центр управления</string>
+    <string name="shield_option_block_shade_desc">Сворачивает шторку уведомлений и быстрые настройки во время таймера. Сторонние оверлеи поверх экрана блокировки скрываются автоматически.</string>
+    <string name="shield_required_badge">Обязательно</string>
+    <string name="shield_optional_badge">Опционально</string>
+    <string name="shield_enabled_badge">Включено</string>
+    <string name="shield_enable_action">Включить</string>
+    <string name="shield_pinning_tip_title">Закрепление экрана</string>
+    <string name="shield_pinning_tip_desc">Дополнительная системная опция в разделе «Безопасность» настроек Android.</string>
+    <string name="shield_pinning_open_settings">Открыть настройки</string>
+    <string name="shield_back_cd">Назад</string>
+
+    <!-- Hidden Revocation Gate (7 taps on version) -->
+    <string name="version_footer_text">Версия 1.0</string>
+    <string name="version_taps_remaining">Осталось нажатий: %1$d</string>
+
+    <string name="revoke_warn1_title">Вы уверены?</string>
+    <string name="revoke_warn1_body">Вы открываете раздел отключения защиты. После отзыва прав приложение можно будет принудительно остановить или удалить.</string>
+    <string name="revoke_warn1_confirm">Продолжить</string>
+    <string name="revoke_warn1_confirm_wait">Продолжить (%1$d)</string>
+
+    <string name="revoke_warn2_title">Подумайте, нужно ли это вам</string>
+    <string name="revoke_warn2_body">Если это импульс или тревога, закройте это окно. Без спецвозможностей и прав администратора защита от обхода перестанет работать.</string>
+    <string name="revoke_warn2_confirm">Всё равно продолжить</string>
+    <string name="revoke_warn2_confirm_wait">Подождите (%1$d)</string>
+    <string name="revoke_keep_protection">Оставить защиту</string>
+
+    <string name="revoke_warn3_title">Подтверждение</string>
+    <string name="revoke_warn3_body">Введите слово «отключить», чтобы открыть панель отзыва прав.</string>
+    <string name="revoke_warn3_keyword">отключить</string>
+    <string name="revoke_warn3_placeholder">Введите «отключить»</string>
+    <string name="revoke_warn3_open">Открыть</string>
+
+    <string name="revoke_panel_title">Отключение защиты</string>
+    <string name="revoke_panel_subtitle">Доступно только пока таймер не запущен. Отключите нужные права перед удалением приложения.</string>
+    <string name="revoke_disable_accessibility">Отключить спецвозможности</string>
+    <string name="revoke_disable_admin">Отключить администратора</string>
+    <string name="revoke_disable_all">Отключить все права защиты</string>
+    <string name="revoke_open_app_settings">Системные настройки приложения</string>
+    <string name="revoke_done_badge">Отключено</string>
+    <string name="revoke_close">Закрыть</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_detox_name">Таймер блокировки</string>
+    <string name="notif_channel_detox_desc">Обратный отсчёт активного таймера.</string>
+    <string name="notif_channel_alert_name">Уведомления блокировки</string>
+    <string name="notif_channel_alert_desc">Статус завершения блокировки.</string>
+    <string name="notif_active_title">Режим тишины · до %1$s</string>
+    <string name="notif_active_text_phone">Осталось %1$s · Только звонки</string>
+    <string name="notif_active_text_vacuum">Осталось %1$s · Полная блокировка</string>
+    <string name="notif_return_title">Блокировка активна</string>
+    <string name="notif_return_text">Осталось %1$s.</string>
+    <string name="notif_complete_title">Блокировка завершена</string>
+    <string name="notif_complete_text">Доступ к приложениям восстановлен.</string>
+</resources>
