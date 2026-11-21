@@ -7,11 +7,11 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
+import androidx.core.net.toUri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
             runCatching { stopLockTask() }
             viewModel.updatePinnedState(false)
         }
-        val uri = if (emergencyOnly) Uri.parse("tel:112") else Uri.parse("tel:")
+        val uri = if (emergencyOnly) "tel:112".toUri() else "tel:".toUri()
         val intent = Intent(Intent.ACTION_DIAL, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -172,17 +172,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openNotificationSettings() {
-        val intent = Intent().apply {
-            action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
-            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+            runCatching { startActivity(intent) }.onFailure { launchAppDetailsSettings() }
+        } else {
+            launchAppDetailsSettings()
         }
-        runCatching { startActivity(intent) }
     }
 
     @SuppressLint("BatteryLife")
     private fun launchBatteryOptimizationPrompt() {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-            data = Uri.parse("package:$packageName")
+            data = "package:$packageName".toUri()
         }
         val launched = runCatching { startActivity(intent) }.isSuccess
         if (!launched) {
@@ -192,7 +195,7 @@ class MainActivity : ComponentActivity() {
 
     private fun launchAppDetailsSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:$packageName")
+            data = "package:$packageName".toUri()
         }
         runCatching { startActivity(intent) }
     }

@@ -124,8 +124,6 @@
     <string name="notif_active_title">Режим тишины · до %1$s</string>
     <string name="notif_active_text_phone">Осталось %1$s · Только звонки</string>
     <string name="notif_active_text_vacuum">Осталось %1$s · Полная блокировка</string>
-    <string name="notif_return_title">Блокировка активна</string>
-    <string name="notif_return_text">Осталось %1$s.</string>
     <string name="notif_complete_title">Блокировка завершена</string>
     <string name="notif_complete_text">Доступ к приложениям восстановлен.</string>
 </resources>

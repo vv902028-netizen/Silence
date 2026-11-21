@@ -26,7 +26,6 @@ data class ProtectionStatus(
     val deviceAdminEnabled: Boolean = false,
     val notificationsGranted: Boolean = false,
     val batteryOptimizationIgnored: Boolean = false,
-    val usageStatsGranted: Boolean = false,
     val dndPolicyGranted: Boolean = false
 ) {
     val requiredReady: Boolean

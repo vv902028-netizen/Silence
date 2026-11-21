@@ -1,8 +1,7 @@
 package com.example.detox.data
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.app.AppOpsManager
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.NotificationManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
@@ -11,14 +10,13 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
-import android.os.Process
 import android.os.SystemClock
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.provider.Settings
 import android.telecom.TelecomManager
 import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.example.detox.admin.DetoxDeviceAdminReceiver
 import com.example.detox.service.DetoxAccessibilityService
 import com.example.detox.service.DetoxMonitorService
@@ -50,7 +48,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
 
     private val lock = Any()
 
-    @SuppressLint("ApplySharedPref")
     fun startSession(durationMinutes: Int, mode: DetoxMode): DetoxSessionSnapshot = synchronized(lock) {
         val durationMs = durationMinutes.coerceIn(MIN_DURATION_MINUTES, MAX_DURATION_MINUTES) * 60_000L
         val nowWall = System.currentTimeMillis()
@@ -94,22 +91,21 @@ class DetoxSessionRepository private constructor(private val appContext: Context
     }
 
     fun savePreferredConfig(durationMinutes: Int, mode: DetoxMode) {
-        prefs.edit()
-            .putInt(KEY_PREFERRED_DURATION_MIN, durationMinutes.coerceIn(MIN_DURATION_MINUTES, MAX_DURATION_MINUTES))
-            .putString(KEY_PREFERRED_MODE, mode.name)
-            .apply()
+        prefs.edit {
+            putInt(KEY_PREFERRED_DURATION_MIN, durationMinutes.coerceIn(MIN_DURATION_MINUTES, MAX_DURATION_MINUTES))
+            putString(KEY_PREFERRED_MODE, mode.name)
+        }
     }
 
     fun readBlockNotificationShade(): Boolean {
         return prefs.getBoolean(KEY_BLOCK_NOTIFICATION_SHADE, false)
     }
 
-    @SuppressLint("ApplySharedPref")
     fun setBlockNotificationShade(enabled: Boolean) = synchronized(lock) {
         if (isSessionActive()) return@synchronized
-        prefs.edit()
-            .putBoolean(KEY_BLOCK_NOTIFICATION_SHADE, enabled)
-            .commit()
+        prefs.edit(commit = true) {
+            putBoolean(KEY_BLOCK_NOTIFICATION_SHADE, enabled)
+        }
         _blockShadeFlow.value = enabled
     }
 
@@ -131,7 +127,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         computeRemainingMsInternal(snap)
     }
 
-    @SuppressLint("ApplySharedPref")
     fun reconcileAfterReboot(): DetoxSessionSnapshot = synchronized(lock) {
         val snap = readSnapshotLocked()
         if (!snap.isActive) return snap
@@ -152,8 +147,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         val elapsedBeforeReboot = max(0L, snap.lastHeartbeatElapsedMs - snap.bootAnchorElapsedRealtimeMs)
         val rawWallOffDuration = nowWall - snap.lastHeartbeatWallMs
 
-        // Guard against clock-forward cheating while the device was powered off:
-        // Negative jump or absurdly large jump gets zero bonus; otherwise credit offline time honestly.
         val remainingBeforeReboot = max(0L, snap.totalDurationMs - (snap.accumulatedElapsedMs + elapsedBeforeReboot))
         val suspiciousClockJump = rawWallOffDuration < 0L || rawWallOffDuration > MAX_OFFLINE_CREDIT_MS
         val creditedOfflineMs = when {
@@ -179,7 +172,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         updated
     }
 
-    @SuppressLint("ApplySharedPref")
     fun recordHeartbeat(): DetoxSessionSnapshot = synchronized(lock) {
         val snap = readSnapshotLocked()
         if (!snap.isActive) return snap
@@ -198,13 +190,10 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         updated
     }
 
-    @SuppressLint("ApplySharedPref")
     fun onSystemTimeChanged(): DetoxSessionSnapshot = synchronized(lock) {
         val snap = readSnapshotLocked()
         if (!snap.isActive) return snap
 
-        // Monotonic elapsedRealtime is completely immune to wall-clock changes.
-        // Recalculate displayed end time so UI stays truthful without shortening the countdown.
         val nowWall = System.currentTimeMillis()
         val remaining = computeRemainingMsInternal(snap)
         val updated = snap.copy(
@@ -217,7 +206,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         updated
     }
 
-    @SuppressLint("ApplySharedPref")
     fun recordBypassAttempt(): DetoxSessionSnapshot = synchronized(lock) {
         val snap = readSnapshotLocked()
         if (!snap.isActive) return snap
@@ -228,7 +216,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         updated
     }
 
-    @SuppressLint("ApplySharedPref")
     fun completeSession(): CompletedSessionSummary? = synchronized(lock) {
         val snap = readSnapshotLocked()
         if (!snap.isActive) return null
@@ -343,8 +330,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             powerManager?.isIgnoringBatteryOptimizations(appContext.packageName) == true
         }.getOrDefault(false)
 
-        val usageStatsGranted = checkUsageStatsPermission()
-
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         val dndGranted = runCatching { nm?.isNotificationPolicyAccessGranted == true }.getOrDefault(false)
 
@@ -355,7 +340,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             deviceAdminEnabled = deviceAdminEnabled,
             notificationsGranted = notificationsGranted,
             batteryOptimizationIgnored = batteryIgnored,
-            usageStatsGranted = usageStatsGranted,
             dndPolicyGranted = dndGranted
         )
     }
@@ -390,28 +374,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         }.getOrDefault(false)
     }
 
-    @Suppress("DEPRECATION")
-    private fun checkUsageStatsPermission(): Boolean {
-        return runCatching {
-            val appOps = appContext.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
-                ?: return false
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                appOps.unsafeCheckOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(),
-                    appContext.packageName
-                )
-            } else {
-                appOps.checkOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(),
-                    appContext.packageName
-                )
-            }
-            mode == AppOpsManager.MODE_ALLOWED
-        }.getOrDefault(false)
-    }
-
     private fun applyDndIfPermitted(mode: DetoxMode): Pair<Boolean, Int> {
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return Pair(false, -1)
@@ -429,12 +391,19 @@ class DetoxSessionRepository private constructor(private val appContext: Context
     }
 
     private fun restoreDndIfApplied(snap: DetoxSessionSnapshot) {
-        if (!snap.dndApplied || snap.previousInterruptionFilter < 0) return
+        if (!snap.dndApplied) return
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return
         if (!nm.isNotificationPolicyAccessGranted) return
+        val safeFilter = when (snap.previousInterruptionFilter) {
+            NotificationManager.INTERRUPTION_FILTER_ALL -> NotificationManager.INTERRUPTION_FILTER_ALL
+            NotificationManager.INTERRUPTION_FILTER_PRIORITY -> NotificationManager.INTERRUPTION_FILTER_PRIORITY
+            NotificationManager.INTERRUPTION_FILTER_NONE -> NotificationManager.INTERRUPTION_FILTER_NONE
+            NotificationManager.INTERRUPTION_FILTER_ALARMS -> NotificationManager.INTERRUPTION_FILTER_ALARMS
+            else -> return
+        }
         runCatching {
-            nm.setInterruptionFilter(snap.previousInterruptionFilter)
+            nm.setInterruptionFilter(safeFilter)
         }
     }
 
@@ -467,23 +436,22 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         )
     }
 
-    @SuppressLint("ApplySharedPref")
     private fun writeSnapshotSynchronously(snap: DetoxSessionSnapshot) {
-        prefs.edit()
-            .putBoolean(KEY_IS_ACTIVE, snap.isActive)
-            .putString(KEY_MODE, snap.mode.name)
-            .putLong(KEY_TOTAL_DURATION_MS, snap.totalDurationMs)
-            .putLong(KEY_ACCUMULATED_ELAPSED_MS, snap.accumulatedElapsedMs)
-            .putLong(KEY_BOOT_ANCHOR_ELAPSED_MS, snap.bootAnchorElapsedRealtimeMs)
-            .putInt(KEY_LAST_BOOT_COUNT, snap.lastBootCount)
-            .putLong(KEY_LAST_HEARTBEAT_WALL_MS, snap.lastHeartbeatWallMs)
-            .putLong(KEY_LAST_HEARTBEAT_ELAPSED_MS, snap.lastHeartbeatElapsedMs)
-            .putLong(KEY_PLANNED_END_WALL_MS, snap.plannedEndWallMs)
-            .putBoolean(KEY_TIME_TAMPER, snap.timeTamperDetected)
-            .putInt(KEY_BYPASS_ATTEMPTS, snap.bypassAttempts)
-            .putBoolean(KEY_DND_APPLIED, snap.dndApplied)
-            .putInt(KEY_PREV_INTERRUPTION_FILTER, snap.previousInterruptionFilter)
-            .commit()
+        prefs.edit(commit = true) {
+            putBoolean(KEY_IS_ACTIVE, snap.isActive)
+            putString(KEY_MODE, snap.mode.name)
+            putLong(KEY_TOTAL_DURATION_MS, snap.totalDurationMs)
+            putLong(KEY_ACCUMULATED_ELAPSED_MS, snap.accumulatedElapsedMs)
+            putLong(KEY_BOOT_ANCHOR_ELAPSED_MS, snap.bootAnchorElapsedRealtimeMs)
+            putInt(KEY_LAST_BOOT_COUNT, snap.lastBootCount)
+            putLong(KEY_LAST_HEARTBEAT_WALL_MS, snap.lastHeartbeatWallMs)
+            putLong(KEY_LAST_HEARTBEAT_ELAPSED_MS, snap.lastHeartbeatElapsedMs)
+            putLong(KEY_PLANNED_END_WALL_MS, snap.plannedEndWallMs)
+            putBoolean(KEY_TIME_TAMPER, snap.timeTamperDetected)
+            putInt(KEY_BYPASS_ATTEMPTS, snap.bypassAttempts)
+            putBoolean(KEY_DND_APPLIED, snap.dndApplied)
+            putInt(KEY_PREV_INTERRUPTION_FILTER, snap.previousInterruptionFilter)
+        }
     }
 
     companion object {
