@@ -33,11 +33,15 @@ import com.example.detox.ui.DetoxViewModel
 import com.example.detox.ui.HomeSetupScreen
 import com.example.detox.ui.SessionCompletedScreen
 import com.example.detox.ui.ShieldSetupScreen
+import android.app.KeyguardManager
+import android.os.SystemClock
+import com.example.detox.service.DetoxAccessibilityService
 import com.example.ui.theme.TishinaTheme
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: DetoxViewModel by viewModels()
+    private var dialerGraceUntilElapsedMs: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,11 +76,8 @@ class MainActivity : ComponentActivity() {
                     onStartClick = viewModel::requestStartConfirmation,
                     onDismissConfirmSheet = viewModel::dismissConfirmSheet,
                     onConfirmLock = {
-                        val mode = uiState.selectedMode
                         viewModel.confirmAndStartSession()
-                        if (mode == DetoxMode.TOTAL_VACUUM) {
-                            requestScreenPinning()
-                        }
+                        requestScreenPinning()
                     },
                     onRequestPinScreen = { requestScreenPinning() },
                     onOpenDialer = { launchDialer(emergencyOnly = false) },
@@ -114,6 +115,18 @@ class MainActivity : ComponentActivity() {
         viewModel.onHostResumed(isCurrentlyPinned())
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
+            val now = SystemClock.elapsedRealtime()
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val locked = km?.isKeyguardLocked == true
+            if (!locked && now > dialerGraceUntilElapsedMs) {
+                DetoxAccessibilityService.enforceLockFocusNow()
+            }
+        }
+    }
+
     private fun configureLockScreenAndOverlayDefense() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -139,6 +152,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestScreenPinning() {
+        dialerGraceUntilElapsedMs = SystemClock.elapsedRealtime() + 6_000L
         runCatching {
             if (!isCurrentlyPinned()) {
                 startLockTask()
@@ -148,6 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchDialer(emergencyOnly: Boolean) {
+        dialerGraceUntilElapsedMs = SystemClock.elapsedRealtime() + 8_000L
         if (isCurrentlyPinned()) {
             runCatching { stopLockTask() }
             viewModel.updatePinnedState(false)

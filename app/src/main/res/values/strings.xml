@@ -87,7 +87,7 @@
     <string name="shield_back_cd">Назад</string>
 
     <!-- Hidden Revocation Gate (7 taps on version) -->
-    <string name="version_footer_text">Версия 1.0</string>
+    <string name="version_footer_text">Версия %1$s</string>
     <string name="version_taps_remaining">Осталось нажатий: %1$d</string>
 
     <string name="revoke_warn1_title">Вы уверены?</string>

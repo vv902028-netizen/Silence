@@ -158,7 +158,7 @@ fun ActiveLockScreen(
                         }
                     }
 
-                    if (!uiState.isScreenPinned && !uiState.protectionStatus.accessibilityEnabled) {
+                    if (!uiState.isScreenPinned) {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerLow,

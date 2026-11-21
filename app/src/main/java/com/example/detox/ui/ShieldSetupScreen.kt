@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.R
 import com.example.detox.data.ProtectionStatus
 import kotlinx.coroutines.delay
@@ -324,7 +325,7 @@ fun ShieldSetupScreen(
                 ) {
                     val noRippleInteraction = remember { MutableInteractionSource() }
                     Text(
-                        text = stringResource(R.string.version_footer_text),
+                        text = stringResource(R.string.version_footer_text, BuildConfig.VERSION_NAME),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
                         modifier = Modifier

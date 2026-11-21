@@ -73,6 +73,11 @@ class DetoxMonitorService : Service() {
         }
 
         isRunning = true
+        val activeMode = repository.getCurrentSnapshot().mode
+        serviceScope.launch {
+            DetoxBackgroundCleaner.pauseBackgroundMediaPlayback(applicationContext)
+            DetoxBackgroundCleaner.terminateBackgroundApps(applicationContext, activeMode)
+        }
         scheduleFinishAlarm(remainingMs)
         startCountdownLoop()
         return START_STICKY
@@ -95,6 +100,11 @@ class DetoxMonitorService : Service() {
                     repository.recordHeartbeat()
                 }
 
+                if (tickCount > 0 && tickCount % BACKGROUND_SWEEP_INTERVAL_SEC == 0) {
+                    val mode = repository.getCurrentSnapshot().mode
+                    DetoxBackgroundCleaner.terminateBackgroundApps(applicationContext, mode)
+                }
+
                 tickCount++
                 delay(1_000L)
             }
@@ -103,6 +113,7 @@ class DetoxMonitorService : Service() {
 
     private fun handleSessionFinished() {
         isRunning = false
+        DetoxBackgroundCleaner.releaseMediaAudioFocus(applicationContext)
         val completed = repository.completeSession()
         cancelAllAlarms(applicationContext)
         if (completed != null) {
@@ -121,6 +132,7 @@ class DetoxMonitorService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        DetoxBackgroundCleaner.releaseMediaAudioFocus(applicationContext)
         monitorJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
@@ -264,6 +276,7 @@ class DetoxMonitorService : Service() {
         private const val REQ_RESTART_WATCHDOG = 5105
 
         private const val HEARTBEAT_INTERVAL_SEC = 15
+        private const val BACKGROUND_SWEEP_INTERVAL_SEC = 60
 
         fun start(context: Context) {
             val intent = Intent(context, DetoxMonitorService::class.java)
