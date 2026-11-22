@@ -25,6 +25,12 @@ class DetoxAccessibilityService : AccessibilityService() {
     private var lastShadeDismissElapsedMs: Long = 0L
     private var lastCountedBypassElapsedMs: Long = 0L
     private var lastBlockedPackage: String? = null
+    @Volatile
+    private var lastObservedAppPackage: String? = null
+
+    private val shadeVerifyRunnable = Runnable {
+        verifyAndCollapseShadeIfStillOpen()
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -54,24 +60,40 @@ class DetoxAccessibilityService : AccessibilityService() {
 
         val snap = repository.getCurrentSnapshot()
         if (!snap.isActive) return
+        if (isDeviceLocked()) return
+
+        val packageName = event.packageName?.toString().orEmpty()
+        if (packageName.isNotBlank() &&
+            packageName !in SYSTEM_UI_PACKAGES &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            lastObservedAppPackage = packageName
+        }
+
+        val blockShadeEnabled = repository.readBlockNotificationShade() || snap.mode == DetoxMode.TOTAL_VACUUM
 
         // 1. Detect multi-window / Freeform floating windows / PiP / OEM sidebars via active window stack
         if (hasDisallowedFloatingOrSplitWindow(snap.mode)) {
-            val sourcePkg = event.packageName?.toString().orEmpty().ifBlank { "floating_window" }
+            val sourcePkg = packageName.ifBlank { "floating_window" }
             interceptDisallowedApp(sourcePkg, collapseFreeformAndSidebars = true)
             return
         }
 
-        val packageName = event.packageName?.toString().orEmpty()
-        if (packageName.isBlank()) return
-
-        // 2. Handle SystemUI (Notification Shade, Quick Settings, Control Center, Recents)
-        if (packageName in SYSTEM_UI_PACKAGES) {
-            handleSystemUiEvent(event, snap.mode)
+        // 2. Detect expanded Notification Shade / Control Center directly from live window stack
+        if (blockShadeEnabled && !MainActivity.isWithinPinningGrace() && hasExpandedSystemShadeWindow()) {
+            triggerShadeCollapseBurst(restoreLockScreen = !isAllowedDialerOrCall(snap.mode))
             return
         }
 
-        // 3. Enforce strict package allowlist (blocks OEM multi-window sidebars, Honor AI, Chrome, Settings, etc.)
+        if (packageName.isBlank()) return
+
+        // 3. Handle SystemUI & OEM Control Center events
+        if (packageName in SYSTEM_UI_PACKAGES) {
+            handleSystemUiEvent(event, snap.mode, blockShadeEnabled)
+            return
+        }
+
+        // 4. Enforce strict package allowlist (blocks OEM multi-window sidebars, Honor AI, Chrome, Settings, etc.)
         if (repository.isAllowedForegroundPackage(packageName, snap.mode)) {
             if (packageName == applicationContext.packageName) {
                 lastBlockedPackage = null
@@ -138,30 +160,91 @@ class DetoxAccessibilityService : AccessibilityService() {
         if (hasSplitDivider) return true
         // Two simultaneous application windows (e.g. LockScreen + Floating Honor AI / Chrome PiP)
         if (appWindowCount >= 2) return true
-        // In Total Vacuum, no non-fullscreen app window should ever be on screen
-        if (mode == DetoxMode.TOTAL_VACUUM && hasCompactFloatingAppWindow) return true
-        // In Phone Only, a compact floating window on top is also a PiP/freeform bypass
+        // Compact floating app window on top is a PiP/freeform bypass
         if (hasCompactFloatingAppWindow) return true
 
         return false
     }
 
-    private fun handleSystemUiEvent(event: AccessibilityEvent, mode: DetoxMode) {
+    /**
+     * Detects expanded Notification Shade or OEM Control Center (including HONOR MagicOS / MIUI / OneUI)
+     * directly from live TYPE_SYSTEM window bounds, defeating repeated swipes and custom OEM class names.
+     */
+    private fun hasExpandedSystemShadeWindow(): Boolean {
+        if (isDeviceLocked()) return false
+        val currentWindows = runCatching { windows }.getOrNull() ?: return false
+        if (currentWindows.isEmpty()) return false
+
+        val dm = resources.displayMetrics
+        val minShadeWidth = (dm.widthPixels * 0.50f).toInt()
+        val minShadeHeight = (dm.heightPixels * 0.28f).toInt()
+        val rect = Rect()
+
+        for (win in currentWindows) {
+            if (win.type != AccessibilityWindowInfo.TYPE_SYSTEM) continue
+            val title = win.title?.toString()?.lowercase().orEmpty()
+            if (isSafeSystemTitle(title)) continue
+
+            win.getBoundsInScreen(rect)
+            val isExpandedPanel = rect.width() >= minShadeWidth && rect.height() >= minShadeHeight
+            val isExplicitControlCenter = title.contains("shade") ||
+                title.contains("control") ||
+                title.contains("quick") ||
+                title.contains("notification") ||
+                title.contains("центр управления") ||
+                title.contains("шторк") ||
+                title.contains("уведомлен")
+
+            if (isExpandedPanel || isExplicitControlCenter) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun isPowerOrSafeDialogVisible(): Boolean {
+        val currentWindows = runCatching { windows }.getOrNull() ?: return false
+        for (win in currentWindows) {
+            if (win.type != AccessibilityWindowInfo.TYPE_SYSTEM) continue
+            val title = win.title?.toString()?.lowercase().orEmpty()
+            if (isSafeSystemTitle(title)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun isSafeSystemTitle(lowerText: String): Boolean {
+        if (lowerText.isBlank()) return false
+        return lowerText.contains("keyguard") ||
+            lowerText.contains("bouncer") ||
+            lowerText.contains("volume") ||
+            lowerText.contains("громкост") ||
+            lowerText.contains("globalactions") ||
+            lowerText.contains("power") ||
+            lowerText.contains("shutdown") ||
+            lowerText.contains("reboot") ||
+            lowerText.contains("питани") ||
+            lowerText.contains("выключ") ||
+            lowerText.contains("перезагруз") ||
+            lowerText.contains("emergency") ||
+            lowerText.contains("экстрен") ||
+            lowerText.contains("toast") ||
+            lowerText.contains("pin") ||
+            lowerText.contains("закреп")
+    }
+
+    private fun handleSystemUiEvent(event: AccessibilityEvent, mode: DetoxMode, blockShadeEnabled: Boolean) {
         if (isDeviceLocked()) return
 
         val className = event.className?.toString().orEmpty()
         val lowerClass = className.lowercase()
         val eventText = event.text?.joinToString(" ")?.lowercase().orEmpty()
         val descText = event.contentDescription?.toString()?.lowercase().orEmpty()
+        val combinedMeta = "$lowerClass $eventText $descText"
 
-        // Never interfere with lockscreen, volume slider, power dialog, or toasts
-        val isSafeSystemDialog = lowerClass.contains("keyguard") ||
-            lowerClass.contains("bouncer") ||
-            lowerClass.contains("volume") ||
-            lowerClass.contains("globalactions") ||
-            lowerClass.contains("power") ||
-            lowerClass.contains("toast")
-        if (isSafeSystemDialog) return
+        // Never interfere with lockscreen, volume slider, power dialog, emergency dialer, or toasts
+        if (isSafeSystemTitle(combinedMeta)) return
 
         val isRecents = lowerClass.contains("recents") || lowerClass.contains("overview")
         if (isRecents) {
@@ -169,10 +252,9 @@ class DetoxAccessibilityService : AccessibilityService() {
             return
         }
 
-        val blockShadeEnabled = repository.readBlockNotificationShade() || mode == DetoxMode.TOTAL_VACUUM
         if (!blockShadeEnabled) return
+        if (MainActivity.isWithinPinningGrace()) return
 
-        val combinedMeta = "$lowerClass $eventText $descText"
         val isShadeOrControlCenter = combinedMeta.contains("shade") ||
             combinedMeta.contains("quicksettings") ||
             combinedMeta.contains("controlcenter") ||
@@ -184,20 +266,61 @@ class DetoxAccessibilityService : AccessibilityService() {
             combinedMeta.contains("statusbar") ||
             combinedMeta.contains("panel") ||
             combinedMeta.contains("expandable") ||
+            event.packageName?.toString()?.contains("controlcenter", ignoreCase = true) == true ||
             (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 (lowerClass.contains("framelayout") || lowerClass.contains("linearlayout")))
 
         if (isShadeOrControlCenter) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastShadeDismissElapsedMs < SHADE_DISMISS_COOLDOWN_MS) return
-            lastShadeDismissElapsedMs = now
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
-            }
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            bringLockScreenDelayed(delayMs = 100L)
+            triggerShadeCollapseBurst(restoreLockScreen = !isAllowedDialerOrCall(mode))
         }
+    }
+
+    /**
+     * Dismisses Notification Shade / Control Center immediately and runs follow-up verification pulses
+     * to defeat rapid repeat swipes and gestures held down past the first dismiss command.
+     */
+    private fun triggerShadeCollapseBurst(restoreLockScreen: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastShadeDismissElapsedMs < SHADE_DISMISS_COOLDOWN_MS) return
+        lastShadeDismissElapsedMs = now
+
+        dismissShadeOnce()
+        if (restoreLockScreen) {
+            bringLockScreenDelayed(delayMs = 90L)
+        }
+
+        // Follow-up verification pulses catch Control Center settling open after finger release
+        mainHandler.removeCallbacks(shadeVerifyRunnable)
+        for (delayMs in SHADE_VERIFY_DELAYS_MS) {
+            mainHandler.postDelayed(shadeVerifyRunnable, delayMs)
+        }
+    }
+
+    private fun verifyAndCollapseShadeIfStillOpen() {
+        if (!::repository.isInitialized || !repository.isSessionActive()) return
+        if (isDeviceLocked() || MainActivity.isWithinPinningGrace() || isPowerOrSafeDialogVisible()) return
+
+        val snap = repository.getCurrentSnapshot()
+        val blockShadeEnabled = repository.readBlockNotificationShade() || snap.mode == DetoxMode.TOTAL_VACUUM
+        if (!blockShadeEnabled) return
+
+        val allowedDialerOrCall = isAllowedDialerOrCall(snap.mode)
+        val shadeStillOpen = hasExpandedSystemShadeWindow() ||
+            (!MainActivity.isLockWindowFocused && !allowedDialerOrCall)
+
+        if (shadeStillOpen) {
+            dismissShadeOnce()
+            if (!allowedDialerOrCall) {
+                bringLockScreenDelayed(delayMs = 80L)
+            }
+        }
+    }
+
+    private fun dismissShadeOnce() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     private fun interceptDisallowedApp(packageName: String, collapseFreeformAndSidebars: Boolean) {
@@ -232,9 +355,12 @@ class DetoxAccessibilityService : AccessibilityService() {
         if (countBypass) {
             repository.recordBypassAttempt()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+        }
         performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
-        bringLockScreenDelayed(delayMs = 150L)
+        bringLockScreenDelayed(delayMs = 140L)
     }
 
     private fun bringLockScreenDelayed(delayMs: Long) {
@@ -248,6 +374,7 @@ class DetoxAccessibilityService : AccessibilityService() {
 
     private val relaunchLockRunnable = Runnable {
         if (!::repository.isInitialized || !repository.isSessionActive()) return@Runnable
+        if (isDeviceLocked()) return@Runnable
         val lockIntent = Intent(applicationContext, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -257,6 +384,22 @@ class DetoxAccessibilityService : AccessibilityService() {
             )
         }
         runCatching { startActivity(lockIntent) }
+    }
+
+    private fun isAllowedDialerOrCall(mode: DetoxMode): Boolean {
+        if (isCallRingingOrActive()) return true
+        val currentPkg = lastObservedAppPackage
+        if (currentPkg in EMERGENCY_CORE_PACKAGES) return true
+        if (mode == DetoxMode.PHONE_ONLY) {
+            if (MainActivity.isWithinDialerGrace()) return true
+            if (!currentPkg.isNullOrBlank() &&
+                currentPkg != applicationContext.packageName &&
+                repository.isAllowedForegroundPackage(currentPkg, DetoxMode.PHONE_ONLY)
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun isDeviceLocked(): Boolean {
@@ -289,6 +432,7 @@ class DetoxAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(relaunchLockRunnable)
+        mainHandler.removeCallbacks(shadeVerifyRunnable)
         if (activeInstance?.get() === this) {
             activeInstance = null
         }
@@ -304,25 +448,89 @@ class DetoxAccessibilityService : AccessibilityService() {
             "com.miui.systemui",
             "miui.systemui.plugin",
             "com.hihonor.systemui",
-            "com.huawei.systemui"
+            "com.huawei.systemui",
+            "com.hihonor.controlcenter",
+            "com.huawei.controlcenter",
+            "com.oplus.systemui",
+            "com.coloros.systemui"
         )
-        private const val REDIRECT_COOLDOWN_MS = 350L
-        private const val SHADE_DISMISS_COOLDOWN_MS = 400L
+        private val EMERGENCY_CORE_PACKAGES = setOf(
+            "com.android.emergency",
+            "com.android.server.telecom",
+            "com.android.phone"
+        )
+        private val SHADE_VERIFY_DELAYS_MS = longArrayOf(160L, 380L, 700L)
+        private const val REDIRECT_COOLDOWN_MS = 250L
+        private const val SHADE_DISMISS_COOLDOWN_MS = 120L
         private const val BYPASS_COUNT_COOLDOWN_MS = 2_500L
 
         @Volatile
         private var activeInstance: WeakReference<DetoxAccessibilityService>? = null
 
-        fun enforceLockFocusNow() {
+        /**
+         * Triggered immediately when MainActivity loses window focus while unlocked and outside grace.
+         * Defeats Control Center / Notification Shade pull-downs and OEM sidebars.
+         */
+        fun onLockWindowLostFocus() {
             val service = activeInstance?.get() ?: return
             if (!service::repository.isInitialized || !service.repository.isSessionActive()) return
-            if (service.isDeviceLocked()) return
+            if (service.isDeviceLocked() || MainActivity.isWithinPinningGrace()) return
+            if (service.isPowerOrSafeDialogVisible()) return
+
             val snap = service.repository.getCurrentSnapshot()
-            if (snap.mode == DetoxMode.PHONE_ONLY && service.isCallRingingOrActive()) return
-            val now = SystemClock.elapsedRealtime()
-            if (now - service.lastRedirectElapsedMs < REDIRECT_COOLDOWN_MS) return
-            service.lastRedirectElapsedMs = now
-            service.collapseAndRestoreLockScreen(countBypass = false)
+            if (service.isAllowedDialerOrCall(snap.mode)) return
+
+            val blockShadeEnabled = service.repository.readBlockNotificationShade() ||
+                snap.mode == DetoxMode.TOTAL_VACUUM
+
+            if (blockShadeEnabled) {
+                service.triggerShadeCollapseBurst(restoreLockScreen = true)
+            }
+            if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
+                service.collapseAndRestoreLockScreen(countBypass = false)
+            }
+        }
+
+        /**
+         * Periodic 1-second safety net invoked by DetoxMonitorService so a stubborn Control Center,
+         * floating window, or post-unlock launcher cannot stay open even after repeated swipes.
+         */
+        fun enforceWatchdogCheck() {
+            val service = activeInstance?.get() ?: return
+            if (!service::repository.isInitialized || !service.repository.isSessionActive()) return
+            if (service.isDeviceLocked() || MainActivity.isWithinPinningGrace()) return
+            if (service.isPowerOrSafeDialogVisible()) return
+
+            val snap = service.repository.getCurrentSnapshot()
+            val allowedDialerOrCall = service.isAllowedDialerOrCall(snap.mode)
+            val blockShadeEnabled = service.repository.readBlockNotificationShade() ||
+                snap.mode == DetoxMode.TOTAL_VACUUM
+
+            if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
+                service.mainHandler.post {
+                    service.collapseAndRestoreLockScreen(countBypass = false)
+                }
+                return
+            }
+
+            if (blockShadeEnabled && service.hasExpandedSystemShadeWindow()) {
+                service.mainHandler.post {
+                    service.dismissShadeOnce()
+                    if (!allowedDialerOrCall) {
+                        service.bringLockScreenDelayed(delayMs = 80L)
+                    }
+                }
+                return
+            }
+
+            if (!MainActivity.isLockWindowFocused && !allowedDialerOrCall) {
+                service.mainHandler.post {
+                    if (blockShadeEnabled) {
+                        service.dismissShadeOnce()
+                    }
+                    service.bringLockScreenDelayed(delayMs = 0L)
+                }
+            }
         }
 
         fun disableSelfSafely(): Boolean {

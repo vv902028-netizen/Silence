@@ -10,7 +10,6 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.WindowManager
 import androidx.core.net.toUri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,7 +40,6 @@ import com.example.ui.theme.TishinaTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: DetoxViewModel by viewModels()
-    private var dialerGraceUntilElapsedMs: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,8 +78,7 @@ class MainActivity : ComponentActivity() {
                         requestScreenPinning()
                     },
                     onRequestPinScreen = { requestScreenPinning() },
-                    onOpenDialer = { launchDialer(emergencyOnly = false) },
-                    onOpenEmergencyDialer = { launchDialer(emergencyOnly = true) },
+                    onOpenDialer = { launchDialer() },
                     onReturnHome = viewModel::dismissCompletedSummary,
                     onEnableAccessibility = { launchSafeSettingsIntent(Settings.ACTION_ACCESSIBILITY_SETTINGS) },
                     onEnableDeviceAdmin = { launchDeviceAdminEnrollment() },
@@ -113,33 +110,30 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.onHostResumed(isCurrentlyPinned())
+        isLockWindowFocused = hasWindowFocus() && viewModel.uiState.value.screen == DetoxScreen.ActiveLock
+    }
+
+    override fun onPause() {
+        isLockWindowFocused = false
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus && viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
-            val now = SystemClock.elapsedRealtime()
+        val inActiveLock = viewModel.uiState.value.screen == DetoxScreen.ActiveLock
+        isLockWindowFocused = hasFocus && inActiveLock
+        if (!hasFocus && inActiveLock) {
             val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
             val locked = km?.isKeyguardLocked == true
-            if (!locked && now > dialerGraceUntilElapsedMs) {
-                DetoxAccessibilityService.enforceLockFocusNow()
+            if (!locked && !isWithinPinningGrace() && !isWithinDialerGrace()) {
+                DetoxAccessibilityService.onLockWindowLostFocus()
             }
         }
     }
 
     private fun configureLockScreenAndOverlayDefense() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-            )
-        }
-
-        // Prevent third-party floating overlays from drawing over or hijacking touches on our UI
+        // Keep native OS Keyguard visible when screen is locked so OS emergency call stays reachable.
+        // Prevent third-party floating overlays from drawing over or hijacking touches on our UI.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             window.setHideOverlayWindows(true)
         }
@@ -152,7 +146,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestScreenPinning() {
-        dialerGraceUntilElapsedMs = SystemClock.elapsedRealtime() + 6_000L
+        pinningGraceUntilElapsedMs = SystemClock.elapsedRealtime() + 6_000L
         runCatching {
             if (!isCurrentlyPinned()) {
                 startLockTask()
@@ -161,14 +155,13 @@ class MainActivity : ComponentActivity() {
         viewModel.updatePinnedState(isCurrentlyPinned())
     }
 
-    private fun launchDialer(emergencyOnly: Boolean) {
+    private fun launchDialer() {
         dialerGraceUntilElapsedMs = SystemClock.elapsedRealtime() + 8_000L
         if (isCurrentlyPinned()) {
             runCatching { stopLockTask() }
             viewModel.updatePinnedState(false)
         }
-        val uri = if (emergencyOnly) "tel:112".toUri() else "tel:".toUri()
-        val intent = Intent(Intent.ACTION_DIAL, uri).apply {
+        val intent = Intent(Intent.ACTION_DIAL, "tel:".toUri()).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { startActivity(intent) }
@@ -222,6 +215,24 @@ class MainActivity : ComponentActivity() {
             runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }
         }
     }
+
+    companion object {
+        @Volatile
+        var isLockWindowFocused: Boolean = false
+            private set
+
+        @Volatile
+        private var pinningGraceUntilElapsedMs: Long = 0L
+
+        @Volatile
+        private var dialerGraceUntilElapsedMs: Long = 0L
+
+        fun isWithinPinningGrace(): Boolean =
+            SystemClock.elapsedRealtime() <= pinningGraceUntilElapsedMs
+
+        fun isWithinDialerGrace(): Boolean =
+            SystemClock.elapsedRealtime() <= dialerGraceUntilElapsedMs
+    }
 }
 
 @Composable
@@ -237,7 +248,6 @@ private fun TishinaRootContent(
     onConfirmLock: () -> Unit,
     onRequestPinScreen: () -> Unit,
     onOpenDialer: () -> Unit,
-    onOpenEmergencyDialer: () -> Unit,
     onReturnHome: () -> Unit,
     onEnableAccessibility: () -> Unit,
     onEnableDeviceAdmin: () -> Unit,
@@ -288,8 +298,7 @@ private fun TishinaRootContent(
             DetoxScreen.ActiveLock -> ActiveLockScreen(
                 uiState = uiState,
                 onRequestPinScreen = onRequestPinScreen,
-                onOpenDialer = onOpenDialer,
-                onOpenEmergencyDialer = onOpenEmergencyDialer
+                onOpenDialer = onOpenDialer
             )
 
             DetoxScreen.Completed -> {

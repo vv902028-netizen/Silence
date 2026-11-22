@@ -638,7 +638,13 @@ private fun ConfirmLockSheetContent(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = stringResource(R.string.confirm_sheet_pinning_note),
+                text = stringResource(
+                    if (selectedMode == DetoxMode.TOTAL_VACUUM) {
+                        R.string.confirm_sheet_note_vacuum
+                    } else {
+                        R.string.confirm_sheet_note_phone
+                    }
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(14.dp)

@@ -30,14 +30,15 @@
     <string name="mode_phone_title">Только звонки</string>
     <string name="mode_phone_subtitle">Входящие и исходящие вызовы.</string>
     <string name="mode_vacuum_title">Полная блокировка</string>
-    <string name="mode_vacuum_subtitle">Доступен только экстренный номер 112.</string>
+    <string name="mode_vacuum_subtitle">Все приложения и звонки заблокированы. Экстренный вызов — с экрана блокировки ОС.</string>
 
     <!-- Start & Confirm Sheet -->
     <string name="start_silence_button">Заблокировать</string>
     <string name="setup_before_start_button">Настроить разрешения</string>
     <string name="confirm_sheet_title">Запустить блокировку?</string>
     <string name="confirm_sheet_body">До %1$s (%2$s). Режим: %3$s. Отменить раньше срока нельзя.</string>
-    <string name="confirm_sheet_pinning_note">На время таймера заблокированы сторонние приложения, «Настройки» и удаление.</string>
+    <string name="confirm_sheet_note_phone">На время таймера доступны только звонки; сторонние приложения, «Настройки» и удаление заблокированы. Блокировка запускается добровольно под вашу ответственность.</string>
+    <string name="confirm_sheet_note_vacuum">На время таймера заблокированы все приложения, звонки, «Настройки», шторка и удаление. Экстренный вызов доступен через системный экран блокировки (при вводе PIN). Запуская режим, вы принимаете полную ответственность за временное ограничение доступа к устройству.</string>
     <string name="confirm_hold_button">Удерживайте 2 сек</string>
     <string name="confirm_holding_button">Удерживайте…</string>
     <string name="confirm_cancel">Отмена</string>
@@ -47,7 +48,7 @@
     <string name="lock_mode_badge_vacuum">Полная блокировка</string>
     <string name="lock_free_at">До %1$s</string>
     <string name="lock_open_dialer">Телефон</string>
-    <string name="lock_emergency_call">Экстренный вызов 112</string>
+    <string name="lock_vacuum_emergency_hint">Экстренный вызов доступен на системном экране блокировки</string>
     <string name="lock_pin_screen_banner_title">Закрепление экрана выключено</string>
     <string name="lock_pin_screen_banner_action">Закрепить</string>
     <string name="lock_screen_pinned_badge">Закреплено</string>

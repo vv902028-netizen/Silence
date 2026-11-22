@@ -95,6 +95,7 @@ class DetoxMonitorService : Service() {
                 }
 
                 updateActiveNotification(remainingMs)
+                DetoxAccessibilityService.enforceWatchdogCheck()
 
                 if (tickCount % HEARTBEAT_INTERVAL_SEC == 0) {
                     repository.recordHeartbeat()

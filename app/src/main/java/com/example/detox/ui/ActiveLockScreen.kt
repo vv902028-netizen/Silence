@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.DoNotDisturbOn
-import androidx.compose.material.icons.rounded.Emergency
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PushPin
@@ -44,6 +43,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.detox.data.DetoxMode
@@ -53,8 +53,7 @@ import com.example.ui.theme.TimerDisplayTextStyle
 fun ActiveLockScreen(
     uiState: DetoxUiState,
     onRequestPinScreen: () -> Unit,
-    onOpenDialer: () -> Unit,
-    onOpenEmergencyDialer: () -> Unit
+    onOpenDialer: () -> Unit
 ) {
     BackHandler(enabled = true) { }
 
@@ -315,25 +314,15 @@ fun ActiveLockScreen(
                             )
                         }
                     } else {
-                        TextButton(
-                            onClick = onOpenEmergencyDialer,
+                        Text(
+                            text = stringResource(R.string.lock_vacuum_emergency_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            textAlign = TextAlign.Center,
                             modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("emergency_call_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Emergency,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = stringResource(R.string.lock_emergency_call),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("vacuum_emergency_hint_text")
+                        )
                     }
                 }
             }
