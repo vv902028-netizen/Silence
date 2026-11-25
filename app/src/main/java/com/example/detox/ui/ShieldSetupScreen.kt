@@ -86,8 +86,6 @@ fun ShieldSetupScreen(
     protectionStatus: ProtectionStatus,
     blockNotificationShade: Boolean,
     blockControlCenter: Boolean,
-    ambientBackgroundEnabled: Boolean,
-    activityHintsEnabled: Boolean,
     onBack: () -> Unit,
     onEnableAccessibility: () -> Unit,
     onEnableDeviceAdmin: () -> Unit,
@@ -96,8 +94,6 @@ fun ShieldSetupScreen(
     onEnableDndAccess: () -> Unit,
     onToggleBlockNotificationShade: (Boolean) -> Unit,
     onToggleBlockControlCenter: (Boolean) -> Unit,
-    onToggleAmbientBackground: (Boolean) -> Unit,
-    onToggleActivityHints: (Boolean) -> Unit,
     onOpenSecuritySettings: () -> Unit,
     onDisableAccessibility: () -> Unit,
     onDisableDeviceAdmin: () -> Unit,
@@ -308,48 +304,6 @@ fun ShieldSetupScreen(
                         ) {
                             Text(text = stringResource(R.string.shield_pinning_open_settings))
                         }
-                    }
-                }
-
-                // Subtle optional interactivity settings (off by default, PHONE_ONLY)
-                Surface(
-                    shape = RoundedCornerShape(22.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.shield_subtle_section_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = stringResource(R.string.shield_subtle_section_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        ToggleOptionRow(
-                            title = stringResource(R.string.shield_option_ambient_bg_title),
-                            description = stringResource(R.string.shield_option_ambient_bg_desc),
-                            checked = ambientBackgroundEnabled,
-                            onCheckedChange = onToggleAmbientBackground,
-                            testTagName = "toggle_ambient_bg_switch"
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                        ToggleOptionRow(
-                            title = stringResource(R.string.shield_option_activity_hints_title),
-                            description = stringResource(R.string.shield_option_activity_hints_desc),
-                            checked = activityHintsEnabled,
-                            onCheckedChange = onToggleActivityHints,
-                            testTagName = "toggle_activity_hints_switch"
-                        )
                     }
                 }
 

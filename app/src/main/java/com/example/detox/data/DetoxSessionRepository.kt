@@ -50,12 +50,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
     private val _blockControlCenterFlow = MutableStateFlow(readBlockControlCenter())
     val blockControlCenterFlow: StateFlow<Boolean> = _blockControlCenterFlow.asStateFlow()
 
-    private val _ambientBackgroundFlow = MutableStateFlow(readAmbientBackgroundEnabled())
-    val ambientBackgroundFlow: StateFlow<Boolean> = _ambientBackgroundFlow.asStateFlow()
-
-    private val _activityHintsFlow = MutableStateFlow(readActivityHintsEnabled())
-    val activityHintsFlow: StateFlow<Boolean> = _activityHintsFlow.asStateFlow()
-
     private val lock = Any()
 
     fun startSession(durationMinutes: Int, mode: DetoxMode): DetoxSessionSnapshot = synchronized(lock) {
@@ -138,30 +132,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             putBoolean(KEY_BLOCK_CONTROL_CENTER, enabled)
         }
         _blockControlCenterFlow.value = enabled
-    }
-
-    fun readAmbientBackgroundEnabled(): Boolean {
-        return prefs.getBoolean(KEY_AMBIENT_BACKGROUND, false)
-    }
-
-    fun setAmbientBackgroundEnabled(enabled: Boolean) = synchronized(lock) {
-        if (isSessionActive()) return@synchronized
-        prefs.edit(commit = true) {
-            putBoolean(KEY_AMBIENT_BACKGROUND, enabled)
-        }
-        _ambientBackgroundFlow.value = enabled
-    }
-
-    fun readActivityHintsEnabled(): Boolean {
-        return prefs.getBoolean(KEY_ACTIVITY_HINTS, false)
-    }
-
-    fun setActivityHintsEnabled(enabled: Boolean) = synchronized(lock) {
-        if (isSessionActive()) return@synchronized
-        prefs.edit(commit = true) {
-            putBoolean(KEY_ACTIVITY_HINTS, enabled)
-        }
-        _activityHintsFlow.value = enabled
     }
 
     fun isSessionActive(): Boolean = synchronized(lock) {
@@ -555,8 +525,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         private const val KEY_PREFERRED_MODE = "pref_mode"
         private const val KEY_BLOCK_NOTIFICATION_SHADE = "pref_block_notification_shade"
         private const val KEY_BLOCK_CONTROL_CENTER = "pref_block_control_center"
-        private const val KEY_AMBIENT_BACKGROUND = "pref_ambient_background"
-        private const val KEY_ACTIVITY_HINTS = "pref_activity_hints"
 
         private val KNOWN_DIALER_PACKAGES = setOf(
             "com.google.android.dialer",

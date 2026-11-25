@@ -140,28 +140,18 @@ class DetoxBackendTest {
     @Test
     fun `seven day session and granular panel toggles are enforced properly`() {
         repository.setBlockControlCenter(false)
-        repository.setAmbientBackgroundEnabled(false)
-        repository.setActivityHintsEnabled(false)
 
         val snap = repository.startSession(durationMinutes = 7 * 24 * 60, mode = DetoxMode.TOTAL_VACUUM)
         assertEquals(7L * 24L * 60L * 60_000L, snap.totalDurationMs)
 
         // Toggles must ignore changes during an active session
         repository.setBlockControlCenter(true)
-        repository.setAmbientBackgroundEnabled(true)
-        repository.setActivityHintsEnabled(true)
         assertFalse(repository.readBlockControlCenter())
-        assertFalse(repository.readAmbientBackgroundEnabled())
-        assertFalse(repository.readActivityHintsEnabled())
 
         repository.completeSession()
 
         // Once idle, toggles save cleanly
         repository.setBlockControlCenter(true)
-        repository.setAmbientBackgroundEnabled(true)
-        repository.setActivityHintsEnabled(true)
         assertTrue(repository.readBlockControlCenter())
-        assertTrue(repository.readAmbientBackgroundEnabled())
-        assertTrue(repository.readActivityHintsEnabled())
     }
 }

@@ -93,8 +93,6 @@ class MainActivity : ComponentActivity() {
                     onEnableDndAccess = { launchSafeSettingsIntent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) },
                     onToggleBlockNotificationShade = viewModel::toggleBlockNotificationShade,
                     onToggleBlockControlCenter = viewModel::toggleBlockControlCenter,
-                    onToggleAmbientBackground = viewModel::toggleAmbientBackground,
-                    onToggleActivityHints = viewModel::toggleActivityHints,
                     onOpenSecuritySettings = { launchSafeSettingsIntent(Settings.ACTION_SECURITY_SETTINGS) },
                     onDisableAccessibility = {
                         val disabledDirectly = viewModel.disableAccessibilityIfIdle()
@@ -270,18 +268,15 @@ private fun TishinaRootContent(
     onEnableDndAccess: () -> Unit,
     onToggleBlockNotificationShade: (Boolean) -> Unit,
     onToggleBlockControlCenter: (Boolean) -> Unit,
-    onToggleAmbientBackground: (Boolean) -> Unit,
-    onToggleActivityHints: (Boolean) -> Unit,
     onOpenSecuritySettings: () -> Unit,
     onDisableAccessibility: () -> Unit,
     onDisableDeviceAdmin: () -> Unit,
     onRevokeAllProtection: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit
 ) {
-    val isVacuumActive = uiState.screen == DetoxScreen.ActiveLock && uiState.activeMode == DetoxMode.TOTAL_VACUUM
     Crossfade(
         targetState = uiState.screen,
-        animationSpec = tween(durationMillis = if (isVacuumActive) 0 else 200),
+        animationSpec = tween(durationMillis = 200),
         label = "screen_crossfade"
     ) { screen ->
         when (screen) {
@@ -300,8 +295,6 @@ private fun TishinaRootContent(
                 protectionStatus = uiState.protectionStatus,
                 blockNotificationShade = uiState.blockNotificationShade,
                 blockControlCenter = uiState.blockControlCenter,
-                ambientBackgroundEnabled = uiState.ambientBackgroundEnabled,
-                activityHintsEnabled = uiState.activityHintsEnabled,
                 onBack = onCloseShieldSetup,
                 onEnableAccessibility = onEnableAccessibility,
                 onEnableDeviceAdmin = onEnableDeviceAdmin,
@@ -310,8 +303,6 @@ private fun TishinaRootContent(
                 onEnableDndAccess = onEnableDndAccess,
                 onToggleBlockNotificationShade = onToggleBlockNotificationShade,
                 onToggleBlockControlCenter = onToggleBlockControlCenter,
-                onToggleAmbientBackground = onToggleAmbientBackground,
-                onToggleActivityHints = onToggleActivityHints,
                 onOpenSecuritySettings = onOpenSecuritySettings,
                 onDisableAccessibility = onDisableAccessibility,
                 onDisableDeviceAdmin = onDisableDeviceAdmin,
