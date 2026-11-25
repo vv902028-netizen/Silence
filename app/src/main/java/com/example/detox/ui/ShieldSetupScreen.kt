@@ -29,9 +29,9 @@ import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DoNotDisturbOn
 import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.NotificationsPaused
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -85,6 +85,9 @@ private const val REQUIRED_SECRET_TAPS = 7
 fun ShieldSetupScreen(
     protectionStatus: ProtectionStatus,
     blockNotificationShade: Boolean,
+    blockControlCenter: Boolean,
+    ambientBackgroundEnabled: Boolean,
+    activityHintsEnabled: Boolean,
     onBack: () -> Unit,
     onEnableAccessibility: () -> Unit,
     onEnableDeviceAdmin: () -> Unit,
@@ -92,6 +95,9 @@ fun ShieldSetupScreen(
     onEnableBatteryUnrestricted: () -> Unit,
     onEnableDndAccess: () -> Unit,
     onToggleBlockNotificationShade: (Boolean) -> Unit,
+    onToggleBlockControlCenter: (Boolean) -> Unit,
+    onToggleAmbientBackground: (Boolean) -> Unit,
+    onToggleActivityHints: (Boolean) -> Unit,
     onOpenSecuritySettings: () -> Unit,
     onDisableAccessibility: () -> Unit,
     onDisableDeviceAdmin: () -> Unit,
@@ -211,7 +217,7 @@ fun ShieldSetupScreen(
                     testTagName = "shield_step_dnd_button"
                 )
 
-                // Toggle: Block Notification Shade & Control Center
+                // Adjustable access to Notification Shade and Control Center (for PHONE_ONLY; always locked in TOTAL_VACUUM)
                 Surface(
                     shape = RoundedCornerShape(22.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -219,56 +225,48 @@ fun ShieldSetupScreen(
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (blockNotificationShade) {
-                                            MaterialTheme.colorScheme.secondaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceContainerHigh
-                                        }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.NotificationsPaused,
-                                    contentDescription = stringResource(R.string.shield_option_block_shade_title),
-                                    tint = if (blockNotificationShade) {
-                                        MaterialTheme.colorScheme.secondary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Text(
-                                text = stringResource(R.string.shield_option_block_shade_title),
+                                text = stringResource(R.string.shield_panels_card_title),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            Switch(
-                                checked = blockNotificationShade,
-                                onCheckedChange = onToggleBlockNotificationShade,
-                                modifier = Modifier.testTag("toggle_block_shade_switch")
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
 
                         Text(
-                            text = stringResource(R.string.shield_option_block_shade_desc),
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = stringResource(R.string.shield_panels_card_note),
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        ToggleOptionRow(
+                            title = stringResource(R.string.shield_option_block_notifications_title),
+                            description = stringResource(R.string.shield_option_block_notifications_desc),
+                            checked = blockNotificationShade,
+                            onCheckedChange = onToggleBlockNotificationShade,
+                            testTagName = "toggle_block_shade_switch"
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        ToggleOptionRow(
+                            title = stringResource(R.string.shield_option_block_control_center_title),
+                            description = stringResource(R.string.shield_option_block_control_center_desc),
+                            checked = blockControlCenter,
+                            onCheckedChange = onToggleBlockControlCenter,
+                            testTagName = "toggle_block_control_center_switch"
                         )
                     }
                 }
@@ -310,6 +308,48 @@ fun ShieldSetupScreen(
                         ) {
                             Text(text = stringResource(R.string.shield_pinning_open_settings))
                         }
+                    }
+                }
+
+                // Subtle optional interactivity settings (off by default, PHONE_ONLY)
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.shield_subtle_section_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = stringResource(R.string.shield_subtle_section_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        ToggleOptionRow(
+                            title = stringResource(R.string.shield_option_ambient_bg_title),
+                            description = stringResource(R.string.shield_option_ambient_bg_desc),
+                            checked = ambientBackgroundEnabled,
+                            onCheckedChange = onToggleAmbientBackground,
+                            testTagName = "toggle_ambient_bg_switch"
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        ToggleOptionRow(
+                            title = stringResource(R.string.shield_option_activity_hints_title),
+                            description = stringResource(R.string.shield_option_activity_hints_desc),
+                            checked = activityHintsEnabled,
+                            onCheckedChange = onToggleActivityHints,
+                            testTagName = "toggle_activity_hints_switch"
+                        )
                     }
                 }
 
@@ -693,5 +733,41 @@ private fun ShieldStepCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Composable
+private fun ToggleOptionRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    testTagName: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.testTag(testTagName)
+        )
     }
 }

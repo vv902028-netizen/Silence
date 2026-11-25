@@ -7,6 +7,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,8 +42,10 @@ import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -67,6 +70,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -78,15 +82,77 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.detox.data.DetoxMode
+import com.example.detox.data.DetoxSessionRepository
 import com.example.detox.data.ProtectionStatus
 import com.example.ui.theme.TimerSetupTextStyle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val PRESET_MINUTES = listOf(15, 30, 60, 120, 240)
+private val PRESET_MINUTES = listOf(30, 60, 240, 720, 1440, 4320, 10080)
+
+/**
+ * Piecewise slider mapping across [5 min .. 7 days]:
+ *   0.00..0.35 -> 5m..120m (5m steps)
+ *   0.35..0.60 -> 120m..720m (30m steps)
+ *   0.60..0.75 -> 720m..1440m (60m steps)
+ *   0.75..1.00 -> 1440m..10080m (360m / 6h steps)
+ */
+private fun durationToSliderFraction(minutes: Int): Float {
+    val m = minutes.coerceIn(
+        DetoxSessionRepository.MIN_DURATION_MINUTES,
+        DetoxSessionRepository.MAX_DURATION_MINUTES
+    ).toFloat()
+    return when {
+        m <= 120f -> ((m - 5f) / 115f) * 0.35f
+        m <= 720f -> 0.35f + ((m - 120f) / 600f) * 0.25f
+        m <= 1440f -> 0.60f + ((m - 720f) / 720f) * 0.15f
+        else -> 0.75f + ((m - 1440f) / (10080f - 1440f)) * 0.25f
+    }.coerceIn(0f, 1f)
+}
+
+private fun sliderFractionToDuration(fraction: Float): Int {
+    val f = fraction.coerceIn(0f, 1f)
+    return when {
+        f <= 0.35f -> {
+            val raw = 5f + (f / 0.35f) * 115f
+            ((raw / 5f).roundToInt() * 5).coerceIn(5, 120)
+        }
+        f <= 0.60f -> {
+            val raw = 120f + ((f - 0.35f) / 0.25f) * 600f
+            ((raw / 30f).roundToInt() * 30).coerceIn(120, 720)
+        }
+        f <= 0.75f -> {
+            val raw = 720f + ((f - 0.60f) / 0.15f) * 720f
+            ((raw / 60f).roundToInt() * 60).coerceIn(720, 1440)
+        }
+        else -> {
+            val raw = 1440f + ((f - 0.75f) / 0.25f) * (10080f - 1440f)
+            ((raw / 360f).roundToInt() * 360).coerceIn(1440, DetoxSessionRepository.MAX_DURATION_MINUTES)
+        }
+    }
+}
+
+private fun computeSmartStepDelta(currentMinutes: Int, increasing: Boolean): Int {
+    return if (increasing) {
+        when {
+            currentMinutes < 120 -> 5
+            currentMinutes < 720 -> 30
+            currentMinutes < 1440 -> 60
+            else -> 360
+        }
+    } else {
+        when {
+            currentMinutes <= 120 -> -5
+            currentMinutes <= 720 -> -30
+            currentMinutes <= 1440 -> -60
+            else -> -360
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -237,6 +303,15 @@ private fun TimerSelectorCard(
 ) {
     val context = LocalContext.current
     val endClockText = TimeFormatter.formatClockTime(estimatedEndWallMs)
+    val isMultiDay = selectedMinutes >= 1440
+    val isOver12h = selectedMinutes > DetoxSessionRepository.LONG_DURATION_WARNING_MINUTES
+    val isOver24h = selectedMinutes > DetoxSessionRepository.EXTREME_DURATION_WARNING_MINUTES
+
+    val setupTextStyle = if (isMultiDay) {
+        TimerSetupTextStyle.copy(fontSize = 34.sp, lineHeight = 40.sp)
+    } else {
+        TimerSetupTextStyle
+    }
 
     Surface(
         shape = RoundedCornerShape(28.dp),
@@ -259,11 +334,11 @@ private fun TimerSelectorCard(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 FilledTonalIconButton(
-                    onClick = { onAdjustDuration(-5) },
-                    enabled = selectedMinutes > 5,
+                    onClick = { onAdjustDuration(computeSmartStepDelta(selectedMinutes, increasing = false)) },
+                    enabled = selectedMinutes > DetoxSessionRepository.MIN_DURATION_MINUTES,
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         contentColor = MaterialTheme.colorScheme.onSurface
@@ -274,20 +349,21 @@ private fun TimerSelectorCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Remove,
-                        contentDescription = stringResource(R.string.timer_minus_five)
+                        contentDescription = stringResource(R.string.timer_minus_step)
                     )
                 }
 
                 Text(
                     text = TimeFormatter.formatSetupDuration(selectedMinutes),
-                    style = TimerSetupTextStyle,
+                    style = setupTextStyle,
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
                     modifier = Modifier.testTag("selected_duration_text")
                 )
 
                 FilledTonalIconButton(
-                    onClick = { onAdjustDuration(5) },
-                    enabled = selectedMinutes < 720,
+                    onClick = { onAdjustDuration(computeSmartStepDelta(selectedMinutes, increasing = true)) },
+                    enabled = selectedMinutes < DetoxSessionRepository.MAX_DURATION_MINUTES,
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         contentColor = MaterialTheme.colorScheme.onSurface
@@ -298,7 +374,7 @@ private fun TimerSelectorCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Add,
-                        contentDescription = stringResource(R.string.timer_plus_five)
+                        contentDescription = stringResource(R.string.timer_plus_step)
                     )
                 }
             }
@@ -330,15 +406,14 @@ private fun TimerSelectorCard(
             Spacer(modifier = Modifier.height(18.dp))
 
             Slider(
-                value = selectedMinutes.coerceAtMost(480).toFloat(),
-                onValueChange = { raw ->
-                    val snapped = ((raw / 5f).roundToInt() * 5).coerceIn(5, 480)
-                    onSelectDuration(snapped)
+                value = durationToSliderFraction(selectedMinutes),
+                onValueChange = { fraction ->
+                    onSelectDuration(sliderFractionToDuration(fraction))
                 },
-                valueRange = 5f..480f,
+                valueRange = 0f..1f,
                 colors = SliderDefaults.colors(
-                    thumbColor = MaterialTheme.colorScheme.primary,
-                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                    thumbColor = if (isOver24h) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    activeTrackColor = if (isOver24h) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHigh
                 ),
                 modifier = Modifier
@@ -380,6 +455,64 @@ private fun TimerSelectorCard(
                     )
                 }
             }
+
+            if (isOver12h) {
+                Spacer(modifier = Modifier.height(14.dp))
+                DurationWarningBanner(
+                    selectedMinutes = selectedMinutes,
+                    isOver24h = isOver24h
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DurationWarningBanner(
+    selectedMinutes: Int,
+    isOver24h: Boolean
+) {
+    val context = LocalContext.current
+    val humanDuration = TimeFormatter.formatDurationHuman(context, selectedMinutes)
+    val containerColor = if (isOver24h) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.tertiaryContainer
+    }
+    val contentColor = if (isOver24h) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(if (isOver24h) "duration_warning_24h" else "duration_warning_12h")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(18.dp)
+            )
+            Text(
+                text = if (isOver24h) {
+                    stringResource(R.string.duration_warn_24h, humanDuration)
+                } else {
+                    stringResource(R.string.duration_warn_12h)
+                },
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -591,6 +724,15 @@ private fun ConfirmLockSheetContent(
         if (selectedMode == DetoxMode.PHONE_ONLY) R.string.mode_phone_title else R.string.mode_vacuum_title
     )
 
+    val isOver12h = durationMinutes > DetoxSessionRepository.LONG_DURATION_WARNING_MINUTES
+    val isOver24h = durationMinutes > DetoxSessionRepository.EXTREME_DURATION_WARNING_MINUTES
+    val holdSeconds = when {
+        isOver24h -> 4
+        isOver12h -> 3
+        else -> 2
+    }
+
+    var extremeAcknowledged by remember(durationMinutes) { mutableStateOf(!isOver24h) }
     val holdProgress = remember { Animatable(0f) }
     var isHolding by remember { mutableStateOf(false) }
     var holdJob by remember { mutableStateOf<Job?>(null) }
@@ -601,20 +743,23 @@ private fun ConfirmLockSheetContent(
             .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(52.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(
+                    if (isOver24h) MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.primaryContainer
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Rounded.Lock,
+                imageVector = if (isOver24h) Icons.Rounded.WarningAmber else Icons.Rounded.Lock,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp)
+                tint = if (isOver24h) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(26.dp)
             )
         }
 
@@ -651,16 +796,60 @@ private fun ConfirmLockSheetContent(
             )
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        if (isOver12h) {
+            DurationWarningBanner(
+                selectedMinutes = durationMinutes,
+                isOver24h = isOver24h
+            )
+        }
 
-        // Deliberate 2-second hold-to-lock button to eliminate accidental lockouts
+        if (isOver24h) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { extremeAcknowledged = !extremeAcknowledged }
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                    .testTag("confirm_extreme_checkbox_row"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = extremeAcknowledged,
+                    onCheckedChange = { extremeAcknowledged = it }
+                )
+                Text(
+                    text = stringResource(R.string.confirm_extreme_checkbox, humanDuration),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        val canHold = extremeAcknowledged
+        val holdFillColor = if (isOver24h) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        val holdContainerColor = if (isOver24h) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.primaryContainer
+        }
+        val holdOnContainer = if (isOver24h) {
+            MaterialTheme.colorScheme.onErrorContainer
+        } else {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(58.dp)
+                .alpha(if (canHold) 1f else 0.45f)
                 .clip(RoundedCornerShape(29.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer)
-                .pointerInput(Unit) {
+                .background(holdContainerColor)
+                .pointerInput(canHold, holdSeconds) {
+                    if (!canHold) return@pointerInput
                     detectTapGestures(
                         onPress = {
                             isHolding = true
@@ -668,7 +857,10 @@ private fun ConfirmLockSheetContent(
                             holdJob = scope.launch {
                                 holdProgress.animateTo(
                                     targetValue = 1f,
-                                    animationSpec = tween(durationMillis = 2000, easing = LinearEasing)
+                                    animationSpec = tween(
+                                        durationMillis = holdSeconds * 1000,
+                                        easing = LinearEasing
+                                    )
                                 )
                                 if (holdProgress.value >= 0.99f) {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -694,18 +886,20 @@ private fun ConfirmLockSheetContent(
                     .align(Alignment.CenterStart)
                     .fillMaxWidth(holdProgress.value.coerceIn(0f, 1f))
                     .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.primary)
+                    .background(holdFillColor)
             )
             Text(
-                text = stringResource(
-                    if (isHolding) R.string.confirm_holding_button else R.string.confirm_hold_button
-                ),
+                text = if (isHolding) {
+                    stringResource(R.string.confirm_holding_button)
+                } else {
+                    stringResource(R.string.confirm_hold_button_sec, holdSeconds)
+                },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = if (holdProgress.value > 0.45f) {
                     MaterialTheme.colorScheme.onPrimary
                 } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
+                    holdOnContainer
                 }
             )
         }

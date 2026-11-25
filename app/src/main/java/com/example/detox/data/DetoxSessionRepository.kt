@@ -20,6 +20,7 @@ import androidx.core.content.edit
 import com.example.detox.admin.DetoxDeviceAdminReceiver
 import com.example.detox.service.DetoxAccessibilityService
 import com.example.detox.service.DetoxMonitorService
+import com.example.detox.service.DetoxSystemDisplayController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +47,15 @@ class DetoxSessionRepository private constructor(private val appContext: Context
     private val _blockShadeFlow = MutableStateFlow(readBlockNotificationShade())
     val blockShadeFlow: StateFlow<Boolean> = _blockShadeFlow.asStateFlow()
 
+    private val _blockControlCenterFlow = MutableStateFlow(readBlockControlCenter())
+    val blockControlCenterFlow: StateFlow<Boolean> = _blockControlCenterFlow.asStateFlow()
+
+    private val _ambientBackgroundFlow = MutableStateFlow(readAmbientBackgroundEnabled())
+    val ambientBackgroundFlow: StateFlow<Boolean> = _ambientBackgroundFlow.asStateFlow()
+
+    private val _activityHintsFlow = MutableStateFlow(readActivityHintsEnabled())
+    val activityHintsFlow: StateFlow<Boolean> = _activityHintsFlow.asStateFlow()
+
     private val lock = Any()
 
     fun startSession(durationMinutes: Int, mode: DetoxMode): DetoxSessionSnapshot = synchronized(lock) {
@@ -55,6 +65,11 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         val bootCount = readBootCount()
 
         val (dndApplied, previousFilter) = applyDndIfPermitted(mode)
+        val displayOverride = if (mode == DetoxMode.TOTAL_VACUUM) {
+            DetoxSystemDisplayController.applyStrictMonochromeAndDisableAod(appContext)
+        } else {
+            DetoxSystemDisplayController.DisplayOverrideSnapshot()
+        }
 
         val snapshot = DetoxSessionSnapshot(
             isActive = true,
@@ -69,7 +84,11 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             timeTamperDetected = false,
             bypassAttempts = 0,
             dndApplied = dndApplied,
-            previousInterruptionFilter = previousFilter
+            previousInterruptionFilter = previousFilter,
+            systemDisplayApplied = displayOverride.applied,
+            previousAodState = displayOverride.previousAodState,
+            previousDaltonizerEnabled = displayOverride.previousDaltonizerEnabled,
+            previousDaltonizerMode = displayOverride.previousDaltonizerMode
         )
 
         writeSnapshotSynchronously(snapshot)
@@ -107,6 +126,42 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             putBoolean(KEY_BLOCK_NOTIFICATION_SHADE, enabled)
         }
         _blockShadeFlow.value = enabled
+    }
+
+    fun readBlockControlCenter(): Boolean {
+        return prefs.getBoolean(KEY_BLOCK_CONTROL_CENTER, readBlockNotificationShade())
+    }
+
+    fun setBlockControlCenter(enabled: Boolean) = synchronized(lock) {
+        if (isSessionActive()) return@synchronized
+        prefs.edit(commit = true) {
+            putBoolean(KEY_BLOCK_CONTROL_CENTER, enabled)
+        }
+        _blockControlCenterFlow.value = enabled
+    }
+
+    fun readAmbientBackgroundEnabled(): Boolean {
+        return prefs.getBoolean(KEY_AMBIENT_BACKGROUND, false)
+    }
+
+    fun setAmbientBackgroundEnabled(enabled: Boolean) = synchronized(lock) {
+        if (isSessionActive()) return@synchronized
+        prefs.edit(commit = true) {
+            putBoolean(KEY_AMBIENT_BACKGROUND, enabled)
+        }
+        _ambientBackgroundFlow.value = enabled
+    }
+
+    fun readActivityHintsEnabled(): Boolean {
+        return prefs.getBoolean(KEY_ACTIVITY_HINTS, false)
+    }
+
+    fun setActivityHintsEnabled(enabled: Boolean) = synchronized(lock) {
+        if (isSessionActive()) return@synchronized
+        prefs.edit(commit = true) {
+            putBoolean(KEY_ACTIVITY_HINTS, enabled)
+        }
+        _activityHintsFlow.value = enabled
     }
 
     fun isSessionActive(): Boolean = synchronized(lock) {
@@ -221,6 +276,13 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         if (!snap.isActive) return null
 
         restoreDndIfApplied(snap)
+        DetoxSystemDisplayController.restorePreviousSettings(
+            context = appContext,
+            applied = snap.systemDisplayApplied,
+            previousAodState = snap.previousAodState,
+            previousDaltonizerEnabled = snap.previousDaltonizerEnabled,
+            previousDaltonizerMode = snap.previousDaltonizerMode
+        )
 
         val summary = CompletedSessionSummary(
             durationMs = snap.totalDurationMs,
@@ -432,7 +494,11 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             timeTamperDetected = prefs.getBoolean(KEY_TIME_TAMPER, false),
             bypassAttempts = prefs.getInt(KEY_BYPASS_ATTEMPTS, 0),
             dndApplied = prefs.getBoolean(KEY_DND_APPLIED, false),
-            previousInterruptionFilter = prefs.getInt(KEY_PREV_INTERRUPTION_FILTER, -1)
+            previousInterruptionFilter = prefs.getInt(KEY_PREV_INTERRUPTION_FILTER, -1),
+            systemDisplayApplied = prefs.getBoolean(KEY_SYS_DISPLAY_APPLIED, false),
+            previousAodState = prefs.getInt(KEY_PREV_AOD_STATE, -1),
+            previousDaltonizerEnabled = prefs.getInt(KEY_PREV_DALTONIZER_ENABLED, -1),
+            previousDaltonizerMode = prefs.getInt(KEY_PREV_DALTONIZER_MODE, -1)
         )
     }
 
@@ -451,16 +517,22 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             putInt(KEY_BYPASS_ATTEMPTS, snap.bypassAttempts)
             putBoolean(KEY_DND_APPLIED, snap.dndApplied)
             putInt(KEY_PREV_INTERRUPTION_FILTER, snap.previousInterruptionFilter)
+            putBoolean(KEY_SYS_DISPLAY_APPLIED, snap.systemDisplayApplied)
+            putInt(KEY_PREV_AOD_STATE, snap.previousAodState)
+            putInt(KEY_PREV_DALTONIZER_ENABLED, snap.previousDaltonizerEnabled)
+            putInt(KEY_PREV_DALTONIZER_MODE, snap.previousDaltonizerMode)
         }
     }
 
     companion object {
         const val MIN_DURATION_MINUTES = 5
-        const val MAX_DURATION_MINUTES = 720 // 12 hours
+        const val MAX_DURATION_MINUTES = 7 * 24 * 60 // 7 days (10,080 min)
         const val DEFAULT_DURATION_MINUTES = 60
+        const val LONG_DURATION_WARNING_MINUTES = 12 * 60 // > 12 hours
+        const val EXTREME_DURATION_WARNING_MINUTES = 24 * 60 // > 1 day
 
         private const val PREFS_NAME = "tishina_detox_vault_v1"
-        private const val MAX_OFFLINE_CREDIT_MS = 24L * 60L * 60L * 1000L
+        private const val MAX_OFFLINE_CREDIT_MS = 8L * 24L * 60L * 60L * 1000L
 
         private const val KEY_IS_ACTIVE = "is_active"
         private const val KEY_MODE = "mode"
@@ -475,9 +547,16 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         private const val KEY_BYPASS_ATTEMPTS = "bypass_attempts"
         private const val KEY_DND_APPLIED = "dnd_applied"
         private const val KEY_PREV_INTERRUPTION_FILTER = "prev_interruption_filter"
+        private const val KEY_SYS_DISPLAY_APPLIED = "sys_display_applied"
+        private const val KEY_PREV_AOD_STATE = "prev_aod_state"
+        private const val KEY_PREV_DALTONIZER_ENABLED = "prev_daltonizer_enabled"
+        private const val KEY_PREV_DALTONIZER_MODE = "prev_daltonizer_mode"
         private const val KEY_PREFERRED_DURATION_MIN = "pref_duration_min"
         private const val KEY_PREFERRED_MODE = "pref_mode"
         private const val KEY_BLOCK_NOTIFICATION_SHADE = "pref_block_notification_shade"
+        private const val KEY_BLOCK_CONTROL_CENTER = "pref_block_control_center"
+        private const val KEY_AMBIENT_BACKGROUND = "pref_ambient_background"
+        private const val KEY_ACTIVITY_HINTS = "pref_activity_hints"
 
         private val KNOWN_DIALER_PACKAGES = setOf(
             "com.google.android.dialer",

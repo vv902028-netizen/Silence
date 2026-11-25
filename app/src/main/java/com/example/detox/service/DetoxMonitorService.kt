@@ -86,7 +86,7 @@ class DetoxMonitorService : Service() {
     private fun startCountdownLoop() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
-            var tickCount = 0
+            var halfSecTick = 0
             while (isActive) {
                 val remainingMs = repository.computeRemainingMs()
                 if (remainingMs <= 0L) {
@@ -94,20 +94,24 @@ class DetoxMonitorService : Service() {
                     break
                 }
 
-                updateActiveNotification(remainingMs)
                 DetoxAccessibilityService.enforceWatchdogCheck()
 
-                if (tickCount % HEARTBEAT_INTERVAL_SEC == 0) {
-                    repository.recordHeartbeat()
+                if (halfSecTick % 2 == 0) {
+                    val wholeSec = halfSecTick / 2
+                    updateActiveNotification(remainingMs)
+
+                    if (wholeSec % HEARTBEAT_INTERVAL_SEC == 0) {
+                        repository.recordHeartbeat()
+                    }
+
+                    if (wholeSec > 0 && wholeSec % BACKGROUND_SWEEP_INTERVAL_SEC == 0) {
+                        val mode = repository.getCurrentSnapshot().mode
+                        DetoxBackgroundCleaner.terminateBackgroundApps(applicationContext, mode)
+                    }
                 }
 
-                if (tickCount > 0 && tickCount % BACKGROUND_SWEEP_INTERVAL_SEC == 0) {
-                    val mode = repository.getCurrentSnapshot().mode
-                    DetoxBackgroundCleaner.terminateBackgroundApps(applicationContext, mode)
-                }
-
-                tickCount++
-                delay(1_000L)
+                halfSecTick++
+                delay(500L)
             }
         }
     }
@@ -251,13 +255,15 @@ class DetoxMonitorService : Service() {
 
     private fun formatRemainingShort(ms: Long): String {
         val totalSeconds = (ms.coerceAtLeast(0L) + 999L) / 1000L
-        val hours = totalSeconds / 3600L
-        val minutes = (totalSeconds % 3600L) / 60L
-        val seconds = totalSeconds % 60L
-        return if (hours > 0) {
-            String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        val days = totalSeconds / 86_400L
+        val remAfterDays = totalSeconds % 86_400L
+        val hours = remAfterDays / 3600L
+        val minutes = (remAfterDays % 3600L) / 60L
+        val seconds = remAfterDays % 60L
+        return when {
+            days > 0L -> String.format(Locale.getDefault(), "%d д %02d:%02d:%02d", days, hours, minutes, seconds)
+            hours > 0L -> String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+            else -> String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
         }
     }
 

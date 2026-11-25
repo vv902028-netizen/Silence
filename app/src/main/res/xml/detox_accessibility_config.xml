@@ -5,5 +5,5 @@
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="false"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="80"
+    android:notificationTimeout="10"
     android:settingsActivity="com.example.MainActivity" />

@@ -37,6 +37,9 @@ data class DetoxUiState(
     val bypassAttempts: Int = 0,
     val isScreenPinned: Boolean = false,
     val blockNotificationShade: Boolean = false,
+    val blockControlCenter: Boolean = false,
+    val ambientBackgroundEnabled: Boolean = false,
+    val activityHintsEnabled: Boolean = false,
     val protectionStatus: ProtectionStatus = ProtectionStatus(),
     val completedSummary: CompletedSessionSummary? = null
 ) {
@@ -91,6 +94,9 @@ class DetoxViewModel(application: Application) : AndroidViewModel(application) {
             timeTamperDetected = snap.timeTamperDetected,
             bypassAttempts = snap.bypassAttempts,
             blockNotificationShade = repository.readBlockNotificationShade(),
+            blockControlCenter = repository.readBlockControlCenter(),
+            ambientBackgroundEnabled = repository.readAmbientBackgroundEnabled(),
+            activityHintsEnabled = repository.readActivityHintsEnabled(),
             protectionStatus = protection,
             completedSummary = repository.lastCompletedFlow.value
         )
@@ -132,6 +138,24 @@ class DetoxViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.blockShadeFlow.collect { enabled ->
                 _uiState.update { it.copy(blockNotificationShade = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.blockControlCenterFlow.collect { enabled ->
+                _uiState.update { it.copy(blockControlCenter = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.ambientBackgroundFlow.collect { enabled ->
+                _uiState.update { it.copy(ambientBackgroundEnabled = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.activityHintsFlow.collect { enabled ->
+                _uiState.update { it.copy(activityHintsEnabled = enabled) }
             }
         }
 
@@ -263,6 +287,18 @@ class DetoxViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleBlockNotificationShade(enabled: Boolean) {
         repository.setBlockNotificationShade(enabled)
+    }
+
+    fun toggleBlockControlCenter(enabled: Boolean) {
+        repository.setBlockControlCenter(enabled)
+    }
+
+    fun toggleAmbientBackground(enabled: Boolean) {
+        repository.setAmbientBackgroundEnabled(enabled)
+    }
+
+    fun toggleActivityHints(enabled: Boolean) {
+        repository.setActivityHintsEnabled(enabled)
     }
 
     fun disableDeviceAdminIfIdle() {

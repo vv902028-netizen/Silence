@@ -28,8 +28,26 @@ class DetoxAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastObservedAppPackage: String? = null
 
+    private val lockActivityIntent: Intent by lazy {
+        Intent(applicationContext, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+            )
+        }
+    }
+
     private val shadeVerifyRunnable = Runnable {
         verifyAndCollapseShadeIfStillOpen()
+    }
+
+    private val relaunchLockRunnable = Runnable {
+        if (!::repository.isInitialized || !repository.isSessionActive()) return@Runnable
+        if (isDeviceLocked()) return@Runnable
+        runCatching { startActivity(lockActivityIntent) }
     }
 
     override fun onServiceConnected() {
@@ -70,17 +88,21 @@ class DetoxAccessibilityService : AccessibilityService() {
             lastObservedAppPackage = packageName
         }
 
-        val blockShadeEnabled = repository.readBlockNotificationShade() || snap.mode == DetoxMode.TOTAL_VACUUM
+        val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockNotificationShade()
+        val blockControlCenter = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockControlCenter()
 
-        // 1. Detect multi-window / Freeform floating windows / PiP / OEM sidebars via active window stack
+        // 1. Instant detection of multi-window / Freeform floating windows / PiP / OEM sidebars
         if (hasDisallowedFloatingOrSplitWindow(snap.mode)) {
             val sourcePkg = packageName.ifBlank { "floating_window" }
             interceptDisallowedApp(sourcePkg, collapseFreeformAndSidebars = true)
             return
         }
 
-        // 2. Detect expanded Notification Shade / Control Center directly from live window stack
-        if (blockShadeEnabled && !MainActivity.isWithinPinningGrace() && hasExpandedSystemShadeWindow()) {
+        // 2. Live window-stack check for expanded Shade / Control Center
+        if ((blockNotifications || blockControlCenter) &&
+            !MainActivity.isWithinPinningGrace() &&
+            hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
+        ) {
             triggerShadeCollapseBurst(restoreLockScreen = !isAllowedDialerOrCall(snap.mode))
             return
         }
@@ -89,11 +111,11 @@ class DetoxAccessibilityService : AccessibilityService() {
 
         // 3. Handle SystemUI & OEM Control Center events
         if (packageName in SYSTEM_UI_PACKAGES) {
-            handleSystemUiEvent(event, snap.mode, blockShadeEnabled)
+            handleSystemUiEvent(event, snap.mode, blockNotifications, blockControlCenter)
             return
         }
 
-        // 4. Enforce strict package allowlist (blocks OEM multi-window sidebars, Honor AI, Chrome, Settings, etc.)
+        // 4. Enforce strict package allowlist (blocks OEM sidebars, Honor AI, Chrome, Settings, etc.)
         if (repository.isAllowedForegroundPackage(packageName, snap.mode)) {
             if (packageName == applicationContext.packageName) {
                 lastBlockedPackage = null
@@ -107,10 +129,6 @@ class DetoxAccessibilityService : AccessibilityService() {
         )
     }
 
-    /**
-     * Checks the live window stack for PiP, Freeform floating windows (e.g. HONOR MagicOS / MIUI / OneUI
-     * floating apps launched from sidebar), or Split-Screen dividers coexisting with our lock screen.
-     */
     private fun hasDisallowedFloatingOrSplitWindow(mode: DetoxMode): Boolean {
         if (isDeviceLocked()) return false
         if (mode == DetoxMode.PHONE_ONLY && isCallRingingOrActive()) return false
@@ -158,20 +176,23 @@ class DetoxAccessibilityService : AccessibilityService() {
         }
 
         if (hasSplitDivider) return true
-        // Two simultaneous application windows (e.g. LockScreen + Floating Honor AI / Chrome PiP)
         if (appWindowCount >= 2) return true
-        // Compact floating app window on top is a PiP/freeform bypass
         if (hasCompactFloatingAppWindow) return true
 
         return false
     }
 
     /**
-     * Detects expanded Notification Shade or OEM Control Center (including HONOR MagicOS / MIUI / OneUI)
-     * directly from live TYPE_SYSTEM window bounds, defeating repeated swipes and custom OEM class names.
+     * Inspects live TYPE_SYSTEM windows to detect Notification Shade and/or Control Center
+     * respecting granular user toggles (both unconditionally enforced in TOTAL_VACUUM).
      */
-    private fun hasExpandedSystemShadeWindow(): Boolean {
+    private fun hasDisallowedSystemPanelWindow(
+        blockNotifications: Boolean,
+        blockControlCenter: Boolean
+    ): Boolean {
+        if (!blockNotifications && !blockControlCenter) return false
         if (isDeviceLocked()) return false
+
         val currentWindows = runCatching { windows }.getOrNull() ?: return false
         if (currentWindows.isEmpty()) return false
 
@@ -185,21 +206,41 @@ class DetoxAccessibilityService : AccessibilityService() {
             val title = win.title?.toString()?.lowercase().orEmpty()
             if (isSafeSystemTitle(title)) continue
 
-            win.getBoundsInScreen(rect)
-            val isExpandedPanel = rect.width() >= minShadeWidth && rect.height() >= minShadeHeight
-            val isExplicitControlCenter = title.contains("shade") ||
-                title.contains("control") ||
-                title.contains("quick") ||
-                title.contains("notification") ||
-                title.contains("центр управления") ||
-                title.contains("шторк") ||
-                title.contains("уведомлен")
+            val matchesControlCenter = isControlCenterMeta(title)
+            val matchesNotifications = isNotificationShadeMeta(title)
 
-            if (isExpandedPanel || isExplicitControlCenter) {
-                return true
+            if (blockControlCenter && matchesControlCenter) return true
+            if (blockNotifications && matchesNotifications) return true
+
+            // When BOTH are blocked (including TOTAL_VACUUM), catch any large unlabeled SystemUI panel
+            if (blockNotifications && blockControlCenter) {
+                win.getBoundsInScreen(rect)
+                if (rect.width() >= minShadeWidth && rect.height() >= minShadeHeight) {
+                    return true
+                }
             }
         }
         return false
+    }
+
+    private fun isControlCenterMeta(lowerMeta: String): Boolean {
+        return lowerMeta.contains("controlcenter") ||
+            lowerMeta.contains("control center") ||
+            lowerMeta.contains("центр управления") ||
+            lowerMeta.contains("quicksettings") ||
+            lowerMeta.contains("quick settings") ||
+            lowerMeta.contains("быстрые настройки") ||
+            lowerMeta.contains("qspanel") ||
+            lowerMeta.contains("qs_panel") ||
+            lowerMeta.contains("tiles")
+    }
+
+    private fun isNotificationShadeMeta(lowerMeta: String): Boolean {
+        return lowerMeta.contains("notification") ||
+            lowerMeta.contains("уведомлен") ||
+            lowerMeta.contains("shade") ||
+            lowerMeta.contains("шторк") ||
+            lowerMeta.contains("statusbar")
     }
 
     private fun isPowerOrSafeDialogVisible(): Boolean {
@@ -234,51 +275,51 @@ class DetoxAccessibilityService : AccessibilityService() {
             lowerText.contains("закреп")
     }
 
-    private fun handleSystemUiEvent(event: AccessibilityEvent, mode: DetoxMode, blockShadeEnabled: Boolean) {
+    private fun handleSystemUiEvent(
+        event: AccessibilityEvent,
+        mode: DetoxMode,
+        blockNotifications: Boolean,
+        blockControlCenter: Boolean
+    ) {
         if (isDeviceLocked()) return
 
         val className = event.className?.toString().orEmpty()
         val lowerClass = className.lowercase()
         val eventText = event.text?.joinToString(" ")?.lowercase().orEmpty()
         val descText = event.contentDescription?.toString()?.lowercase().orEmpty()
-        val combinedMeta = "$lowerClass $eventText $descText"
+        val pkgLower = event.packageName?.toString()?.lowercase().orEmpty()
+        val combinedMeta = "$pkgLower $lowerClass $eventText $descText"
 
         // Never interfere with lockscreen, volume slider, power dialog, emergency dialer, or toasts
         if (isSafeSystemTitle(combinedMeta)) return
 
         val isRecents = lowerClass.contains("recents") || lowerClass.contains("overview")
         if (isRecents) {
-            collapseAndRestoreLockScreen(countBypass = false)
+            collapseAndRestoreLockScreen()
             return
         }
 
-        if (!blockShadeEnabled) return
+        if (!blockNotifications && !blockControlCenter) return
         if (MainActivity.isWithinPinningGrace()) return
 
-        val isShadeOrControlCenter = combinedMeta.contains("shade") ||
-            combinedMeta.contains("quicksettings") ||
-            combinedMeta.contains("controlcenter") ||
-            combinedMeta.contains("control center") ||
-            combinedMeta.contains("центр управления") ||
-            combinedMeta.contains("уведомлен") ||
-            combinedMeta.contains("notification") ||
-            combinedMeta.contains("qspanel") ||
-            combinedMeta.contains("statusbar") ||
+        val isControlCenterEvent = isControlCenterMeta(combinedMeta)
+        val isNotificationEvent = isNotificationShadeMeta(combinedMeta)
+        val isGenericExpandedPanel = (blockNotifications && blockControlCenter) && (
             combinedMeta.contains("panel") ||
-            combinedMeta.contains("expandable") ||
-            event.packageName?.toString()?.contains("controlcenter", ignoreCase = true) == true ||
-            (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                (lowerClass.contains("framelayout") || lowerClass.contains("linearlayout")))
+                combinedMeta.contains("expandable") ||
+                (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                    (lowerClass.contains("framelayout") || lowerClass.contains("linearlayout")))
+            )
 
-        if (isShadeOrControlCenter) {
+        val shouldDismiss = (blockControlCenter && isControlCenterEvent) ||
+            (blockNotifications && isNotificationEvent) ||
+            isGenericExpandedPanel
+
+        if (shouldDismiss) {
             triggerShadeCollapseBurst(restoreLockScreen = !isAllowedDialerOrCall(mode))
         }
     }
 
-    /**
-     * Dismisses Notification Shade / Control Center immediately and runs follow-up verification pulses
-     * to defeat rapid repeat swipes and gestures held down past the first dismiss command.
-     */
     private fun triggerShadeCollapseBurst(restoreLockScreen: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastShadeDismissElapsedMs < SHADE_DISMISS_COOLDOWN_MS) return
@@ -286,10 +327,9 @@ class DetoxAccessibilityService : AccessibilityService() {
 
         dismissShadeOnce()
         if (restoreLockScreen) {
-            bringLockScreenDelayed(delayMs = 90L)
+            bringLockScreenNowAndConfirm()
         }
 
-        // Follow-up verification pulses catch Control Center settling open after finger release
         mainHandler.removeCallbacks(shadeVerifyRunnable)
         for (delayMs in SHADE_VERIFY_DELAYS_MS) {
             mainHandler.postDelayed(shadeVerifyRunnable, delayMs)
@@ -301,17 +341,19 @@ class DetoxAccessibilityService : AccessibilityService() {
         if (isDeviceLocked() || MainActivity.isWithinPinningGrace() || isPowerOrSafeDialogVisible()) return
 
         val snap = repository.getCurrentSnapshot()
-        val blockShadeEnabled = repository.readBlockNotificationShade() || snap.mode == DetoxMode.TOTAL_VACUUM
-        if (!blockShadeEnabled) return
+        val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockNotificationShade()
+        val blockControlCenter = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockControlCenter()
+        if (!blockNotifications && !blockControlCenter) return
 
         val allowedDialerOrCall = isAllowedDialerOrCall(snap.mode)
-        val shadeStillOpen = hasExpandedSystemShadeWindow() ||
-            (!MainActivity.isLockWindowFocused && !allowedDialerOrCall)
+        val panelVisible = hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
+        val unfocusedAndBothBlocked = blockNotifications && blockControlCenter &&
+            !MainActivity.isLockWindowFocused && !allowedDialerOrCall
 
-        if (shadeStillOpen) {
+        if (panelVisible || unfocusedAndBothBlocked) {
             dismissShadeOnce()
             if (!allowedDialerOrCall) {
-                bringLockScreenDelayed(delayMs = 80L)
+                bringLockScreenDelayed(delayMs = 50L)
             }
         }
     }
@@ -323,44 +365,56 @@ class DetoxAccessibilityService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
+    /**
+     * Zero-latency escape interception: brings MainActivity back and collapses overlays FIRST,
+     * then records bypass count asynchronously so SharedPreferences disk commit never adds lag.
+     */
     private fun interceptDisallowedApp(packageName: String, collapseFreeformAndSidebars: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRedirectElapsedMs < REDIRECT_COOLDOWN_MS) return
         lastRedirectElapsedMs = now
 
+        // 1. Immediate UI recovery (0ms)
+        if (collapseFreeformAndSidebars || isSettingsOrInstallerPackage(packageName)) {
+            collapseAndRestoreLockScreen()
+        } else {
+            bringLockScreenNowAndConfirm()
+        }
+
+        // 2. Deferred bookkeeping off the critical redirect path
         val isNewAttempt = packageName != lastBlockedPackage ||
             (now - lastCountedBypassElapsedMs) >= BYPASS_COUNT_COOLDOWN_MS
         if (isNewAttempt) {
             lastBlockedPackage = packageName
             lastCountedBypassElapsedMs = now
-            repository.recordBypassAttempt()
+            mainHandler.post {
+                if (::repository.isInitialized && repository.isSessionActive()) {
+                    repository.recordBypassAttempt()
+                }
+            }
         }
 
         if (!DetoxMonitorService.isRunning) {
-            runCatching { DetoxMonitorService.start(applicationContext) }
-        }
-
-        if (collapseFreeformAndSidebars || isSettingsOrInstallerPackage(packageName)) {
-            collapseAndRestoreLockScreen(countBypass = false)
-        } else {
-            bringLockScreenDelayed(delayMs = 0L)
+            mainHandler.post {
+                runCatching { DetoxMonitorService.start(applicationContext) }
+            }
         }
     }
 
-    /**
-     * Collapses Freeform floating windows, PiP, OEM sidebars (HONOR/MIUI/OneUI), and Settings screens
-     * using BACK + HOME, then brings MainActivity back fullscreen after a short WM settle delay.
-     */
-    private fun collapseAndRestoreLockScreen(countBypass: Boolean) {
-        if (countBypass) {
-            repository.recordBypassAttempt()
-        }
+    private fun collapseAndRestoreLockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
-        bringLockScreenDelayed(delayMs = 140L)
+        // Fire immediately AND schedule a quick follow-up after WM transition settles
+        relaunchLockRunnable.run()
+        bringLockScreenDelayed(delayMs = 95L)
+    }
+
+    private fun bringLockScreenNowAndConfirm() {
+        relaunchLockRunnable.run()
+        bringLockScreenDelayed(delayMs = 80L)
     }
 
     private fun bringLockScreenDelayed(delayMs: Long) {
@@ -370,20 +424,6 @@ class DetoxAccessibilityService : AccessibilityService() {
         } else {
             mainHandler.postDelayed(relaunchLockRunnable, delayMs)
         }
-    }
-
-    private val relaunchLockRunnable = Runnable {
-        if (!::repository.isInitialized || !repository.isSessionActive()) return@Runnable
-        if (isDeviceLocked()) return@Runnable
-        val lockIntent = Intent(applicationContext, MainActivity::class.java).apply {
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-            )
-        }
-        runCatching { startActivity(lockIntent) }
     }
 
     private fun isAllowedDialerOrCall(mode: DetoxMode): Boolean {
@@ -459,18 +499,14 @@ class DetoxAccessibilityService : AccessibilityService() {
             "com.android.server.telecom",
             "com.android.phone"
         )
-        private val SHADE_VERIFY_DELAYS_MS = longArrayOf(160L, 380L, 700L)
-        private const val REDIRECT_COOLDOWN_MS = 250L
-        private const val SHADE_DISMISS_COOLDOWN_MS = 120L
+        private val SHADE_VERIFY_DELAYS_MS = longArrayOf(140L, 340L, 640L)
+        private const val REDIRECT_COOLDOWN_MS = 90L
+        private const val SHADE_DISMISS_COOLDOWN_MS = 80L
         private const val BYPASS_COUNT_COOLDOWN_MS = 2_500L
 
         @Volatile
         private var activeInstance: WeakReference<DetoxAccessibilityService>? = null
 
-        /**
-         * Triggered immediately when MainActivity loses window focus while unlocked and outside grace.
-         * Defeats Control Center / Notification Shade pull-downs and OEM sidebars.
-         */
         fun onLockWindowLostFocus() {
             val service = activeInstance?.get() ?: return
             if (!service::repository.isInitialized || !service.repository.isSessionActive()) return
@@ -480,21 +516,23 @@ class DetoxAccessibilityService : AccessibilityService() {
             val snap = service.repository.getCurrentSnapshot()
             if (service.isAllowedDialerOrCall(snap.mode)) return
 
-            val blockShadeEnabled = service.repository.readBlockNotificationShade() ||
-                snap.mode == DetoxMode.TOTAL_VACUUM
+            val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM ||
+                service.repository.readBlockNotificationShade()
+            val blockControlCenter = snap.mode == DetoxMode.TOTAL_VACUUM ||
+                service.repository.readBlockControlCenter()
 
-            if (blockShadeEnabled) {
-                service.triggerShadeCollapseBurst(restoreLockScreen = true)
-            }
             if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
-                service.collapseAndRestoreLockScreen(countBypass = false)
+                service.collapseAndRestoreLockScreen()
+                return
+            }
+
+            if ((blockNotifications && blockControlCenter) ||
+                service.hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
+            ) {
+                service.triggerShadeCollapseBurst(restoreLockScreen = true)
             }
         }
 
-        /**
-         * Periodic 1-second safety net invoked by DetoxMonitorService so a stubborn Control Center,
-         * floating window, or post-unlock launcher cannot stay open even after repeated swipes.
-         */
         fun enforceWatchdogCheck() {
             val service = activeInstance?.get() ?: return
             if (!service::repository.isInitialized || !service.repository.isSessionActive()) return
@@ -503,32 +541,40 @@ class DetoxAccessibilityService : AccessibilityService() {
 
             val snap = service.repository.getCurrentSnapshot()
             val allowedDialerOrCall = service.isAllowedDialerOrCall(snap.mode)
-            val blockShadeEnabled = service.repository.readBlockNotificationShade() ||
-                snap.mode == DetoxMode.TOTAL_VACUUM
+            val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM ||
+                service.repository.readBlockNotificationShade()
+            val blockControlCenter = snap.mode == DetoxMode.TOTAL_VACUUM ||
+                service.repository.readBlockControlCenter()
 
             if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
-                service.mainHandler.post {
-                    service.collapseAndRestoreLockScreen(countBypass = false)
-                }
+                service.mainHandler.post { service.collapseAndRestoreLockScreen() }
                 return
             }
 
-            if (blockShadeEnabled && service.hasExpandedSystemShadeWindow()) {
+            if ((blockNotifications || blockControlCenter) &&
+                service.hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
+            ) {
                 service.mainHandler.post {
                     service.dismissShadeOnce()
                     if (!allowedDialerOrCall) {
-                        service.bringLockScreenDelayed(delayMs = 80L)
+                        service.bringLockScreenDelayed(delayMs = 50L)
                     }
                 }
                 return
             }
 
             if (!MainActivity.isLockWindowFocused && !allowedDialerOrCall) {
-                service.mainHandler.post {
-                    if (blockShadeEnabled) {
-                        service.dismissShadeOnce()
+                // Only force back when not intentionally viewing an allowed panel (e.g. notifications allowed in PHONE_ONLY)
+                val bothBlocked = blockNotifications && blockControlCenter
+                val leftToOtherApp = service.lastObservedAppPackage != null &&
+                    service.lastObservedAppPackage != service.applicationContext.packageName
+                if (bothBlocked || leftToOtherApp || snap.mode == DetoxMode.TOTAL_VACUUM) {
+                    service.mainHandler.post {
+                        if (bothBlocked) {
+                            service.dismissShadeOnce()
+                        }
+                        service.bringLockScreenDelayed(delayMs = 0L)
                     }
-                    service.bringLockScreenDelayed(delayMs = 0L)
                 }
             }
         }

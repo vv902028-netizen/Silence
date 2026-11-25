@@ -123,14 +123,45 @@ class DetoxBackendTest {
     }
 
     @Test
-    fun `time formatter formats durations and countdowns accurately`() {
+    fun `time formatter formats durations and countdowns accurately including multi-day`() {
         assertEquals("00:05", TimeFormatter.formatSetupDuration(5))
         assertEquals("01:30", TimeFormatter.formatSetupDuration(90))
         assertEquals("12:00", TimeFormatter.formatSetupDuration(720))
+        assertEquals("1 д 00:00", TimeFormatter.formatSetupDuration(1440))
+        assertEquals("7 д 00:00", TimeFormatter.formatSetupDuration(10080))
 
         assertEquals("00:00", TimeFormatter.formatCountdown(0L))
         assertEquals("00:59", TimeFormatter.formatCountdown(59_000L))
         assertEquals("01:00:00", TimeFormatter.formatCountdown(3_600_000L))
+        assertEquals("2 д 01:00:00", TimeFormatter.formatCountdown(176_400_000L))
         assertTrue(SystemClock.elapsedRealtime() >= 0L)
+    }
+
+    @Test
+    fun `seven day session and granular panel toggles are enforced properly`() {
+        repository.setBlockControlCenter(false)
+        repository.setAmbientBackgroundEnabled(false)
+        repository.setActivityHintsEnabled(false)
+
+        val snap = repository.startSession(durationMinutes = 7 * 24 * 60, mode = DetoxMode.TOTAL_VACUUM)
+        assertEquals(7L * 24L * 60L * 60_000L, snap.totalDurationMs)
+
+        // Toggles must ignore changes during an active session
+        repository.setBlockControlCenter(true)
+        repository.setAmbientBackgroundEnabled(true)
+        repository.setActivityHintsEnabled(true)
+        assertFalse(repository.readBlockControlCenter())
+        assertFalse(repository.readAmbientBackgroundEnabled())
+        assertFalse(repository.readActivityHintsEnabled())
+
+        repository.completeSession()
+
+        // Once idle, toggles save cleanly
+        repository.setBlockControlCenter(true)
+        repository.setAmbientBackgroundEnabled(true)
+        repository.setActivityHintsEnabled(true)
+        assertTrue(repository.readBlockControlCenter())
+        assertTrue(repository.readAmbientBackgroundEnabled())
+        assertTrue(repository.readActivityHintsEnabled())
     }
 }

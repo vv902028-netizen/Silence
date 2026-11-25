@@ -92,6 +92,9 @@ class MainActivity : ComponentActivity() {
                     onEnableBatteryUnrestricted = { launchBatteryOptimizationPrompt() },
                     onEnableDndAccess = { launchSafeSettingsIntent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) },
                     onToggleBlockNotificationShade = viewModel::toggleBlockNotificationShade,
+                    onToggleBlockControlCenter = viewModel::toggleBlockControlCenter,
+                    onToggleAmbientBackground = viewModel::toggleAmbientBackground,
+                    onToggleActivityHints = viewModel::toggleActivityHints,
                     onOpenSecuritySettings = { launchSafeSettingsIntent(Settings.ACTION_SECURITY_SETTINGS) },
                     onDisableAccessibility = {
                         val disabledDirectly = viewModel.disableAccessibilityIfIdle()
@@ -116,6 +119,17 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         isLockWindowFocused = false
         super.onPause()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val locked = km?.isKeyguardLocked == true
+            if (!locked && !isWithinPinningGrace() && !isWithinDialerGrace()) {
+                DetoxAccessibilityService.onLockWindowLostFocus()
+            }
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -255,15 +269,19 @@ private fun TishinaRootContent(
     onEnableBatteryUnrestricted: () -> Unit,
     onEnableDndAccess: () -> Unit,
     onToggleBlockNotificationShade: (Boolean) -> Unit,
+    onToggleBlockControlCenter: (Boolean) -> Unit,
+    onToggleAmbientBackground: (Boolean) -> Unit,
+    onToggleActivityHints: (Boolean) -> Unit,
     onOpenSecuritySettings: () -> Unit,
     onDisableAccessibility: () -> Unit,
     onDisableDeviceAdmin: () -> Unit,
     onRevokeAllProtection: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit
 ) {
+    val isVacuumActive = uiState.screen == DetoxScreen.ActiveLock && uiState.activeMode == DetoxMode.TOTAL_VACUUM
     Crossfade(
         targetState = uiState.screen,
-        animationSpec = tween(durationMillis = 220),
+        animationSpec = tween(durationMillis = if (isVacuumActive) 0 else 200),
         label = "screen_crossfade"
     ) { screen ->
         when (screen) {
@@ -281,6 +299,9 @@ private fun TishinaRootContent(
             DetoxScreen.ShieldSetup -> ShieldSetupScreen(
                 protectionStatus = uiState.protectionStatus,
                 blockNotificationShade = uiState.blockNotificationShade,
+                blockControlCenter = uiState.blockControlCenter,
+                ambientBackgroundEnabled = uiState.ambientBackgroundEnabled,
+                activityHintsEnabled = uiState.activityHintsEnabled,
                 onBack = onCloseShieldSetup,
                 onEnableAccessibility = onEnableAccessibility,
                 onEnableDeviceAdmin = onEnableDeviceAdmin,
@@ -288,6 +309,9 @@ private fun TishinaRootContent(
                 onEnableBatteryUnrestricted = onEnableBatteryUnrestricted,
                 onEnableDndAccess = onEnableDndAccess,
                 onToggleBlockNotificationShade = onToggleBlockNotificationShade,
+                onToggleBlockControlCenter = onToggleBlockControlCenter,
+                onToggleAmbientBackground = onToggleAmbientBackground,
+                onToggleActivityHints = onToggleActivityHints,
                 onOpenSecuritySettings = onOpenSecuritySettings,
                 onDisableAccessibility = onDisableAccessibility,
                 onDisableDeviceAdmin = onDisableDeviceAdmin,

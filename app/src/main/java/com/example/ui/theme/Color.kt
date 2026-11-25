@@ -56,3 +56,8 @@ val SurfaceHighDark = Color(0xFF262C38)
 val MutedCloudTextDark = Color(0xFFABB4C4)
 val SoftOutlineDark = Color(0xFF434C5C)
 val SoftOutlineVariantDark = Color(0xFF2D3442)
+
+// Strict monochrome brick palette for TOTAL_VACUUM mode
+val VacuumPureWhite = Color(0xFFFFFFFF)
+val VacuumPureBlack = Color(0xFF000000)
+val VacuumMutedGray = Color(0xFF5F6368)
