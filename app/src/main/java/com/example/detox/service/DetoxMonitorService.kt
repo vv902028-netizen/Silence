@@ -74,6 +74,7 @@ class DetoxMonitorService : Service() {
 
         isRunning = true
         val activeMode = repository.getCurrentSnapshot().mode
+        DetoxAccessibilityService.syncOverlaysNow()
         serviceScope.launch {
             DetoxBackgroundCleaner.pauseBackgroundMediaPlayback(applicationContext)
             DetoxBackgroundCleaner.terminateBackgroundApps(applicationContext, activeMode)
@@ -118,6 +119,7 @@ class DetoxMonitorService : Service() {
 
     private fun handleSessionFinished() {
         isRunning = false
+        DetoxAccessibilityService.clearOverlaysNow()
         DetoxBackgroundCleaner.releaseMediaAudioFocus(applicationContext)
         val completed = repository.completeSession()
         cancelAllAlarms(applicationContext)
@@ -137,6 +139,9 @@ class DetoxMonitorService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (!repository.isSessionActive()) {
+            DetoxAccessibilityService.clearOverlaysNow()
+        }
         DetoxBackgroundCleaner.releaseMediaAudioFocus(applicationContext)
         monitorJob?.cancel()
         serviceScope.cancel()

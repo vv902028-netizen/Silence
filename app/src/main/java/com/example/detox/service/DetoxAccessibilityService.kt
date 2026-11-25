@@ -2,8 +2,10 @@ package com.example.detox.service
 
 import android.accessibilityservice.AccessibilityService
 import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Rect
 import android.media.AudioManager
 import android.os.Build
@@ -20,6 +22,7 @@ import java.lang.ref.WeakReference
 class DetoxAccessibilityService : AccessibilityService() {
 
     private lateinit var repository: DetoxSessionRepository
+    private lateinit var overlayController: DetoxOverlayController
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastRedirectElapsedMs: Long = 0L
     private var lastShadeDismissElapsedMs: Long = 0L
@@ -27,6 +30,7 @@ class DetoxAccessibilityService : AccessibilityService() {
     private var lastBlockedPackage: String? = null
     @Volatile
     private var lastObservedAppPackage: String? = null
+    private var screenReceiverRegistered: Boolean = false
 
     private val lockActivityIntent: Intent by lazy {
         Intent(applicationContext, MainActivity::class.java).apply {
@@ -37,6 +41,22 @@ class DetoxAccessibilityService : AccessibilityService() {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_NO_ANIMATION
             )
+        }
+    }
+
+    private val screenStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    // Always hide overlays on screen off so native OS Keyguard & 112 button stay 100% unobstructed
+                    if (::overlayController.isInitialized) {
+                        overlayController.hideAll()
+                    }
+                }
+                Intent.ACTION_USER_PRESENT, Intent.ACTION_SCREEN_ON -> {
+                    syncOverlaysInternal()
+                }
+            }
         }
     }
 
@@ -54,10 +74,33 @@ class DetoxAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         activeInstance = WeakReference(this)
         repository = DetoxSessionRepository.getInstance(applicationContext)
+        overlayController = DetoxOverlayController(this)
+        registerScreenStateReceiver()
         repository.refreshProtectionStatus()
         repository.reconcileAfterReboot()
-        if (repository.isSessionActive() && !DetoxMonitorService.isRunning) {
-            runCatching { DetoxMonitorService.start(applicationContext) }
+        if (repository.isSessionActive()) {
+            if (!DetoxMonitorService.isRunning) {
+                runCatching { DetoxMonitorService.start(applicationContext) }
+            }
+            syncOverlaysInternal()
+        }
+    }
+
+    private fun registerScreenStateReceiver() {
+        if (screenReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenStateReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(screenStateReceiver, filter)
+            }
+            screenReceiverRegistered = true
         }
     }
 
@@ -66,19 +109,33 @@ class DetoxAccessibilityService : AccessibilityService() {
         if (!::repository.isInitialized) {
             repository = DetoxSessionRepository.getInstance(applicationContext)
         }
+        if (!::overlayController.isInitialized) {
+            overlayController = DetoxOverlayController(this)
+        }
 
-        if (!repository.isSessionActive()) return
+        if (!repository.isSessionActive()) {
+            overlayController.hideAll()
+            return
+        }
 
         if (repository.computeRemainingMs() <= 0L) {
+            overlayController.hideAll()
             repository.completeSession()
             DetoxMonitorService.stop(applicationContext)
             DetoxMonitorService.cancelAllAlarms(applicationContext)
             return
         }
 
+        if (isDeviceLocked()) {
+            overlayController.hideAll()
+            return
+        }
+
         val snap = repository.getCurrentSnapshot()
-        if (!snap.isActive) return
-        if (isDeviceLocked()) return
+        if (!snap.isActive) {
+            overlayController.hideAll()
+            return
+        }
 
         val packageName = event.packageName?.toString().orEmpty()
         if (packageName.isNotBlank() &&
@@ -86,6 +143,15 @@ class DetoxAccessibilityService : AccessibilityService() {
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
             lastObservedAppPackage = packageName
+        }
+
+        // If power dialog or emergency call screen appeared, immediately yield overlays for safety
+        val eventMeta = "${event.className?.toString().orEmpty()} ${event.text?.joinToString(" ").orEmpty()}".lowercase()
+        if (isSafeSystemTitle(eventMeta) || isPowerOrSafeDialogVisible() || packageName in EMERGENCY_CORE_PACKAGES) {
+            if (packageName in EMERGENCY_CORE_PACKAGES || isPowerDialogMeta(eventMeta) || isPowerOrSafeDialogVisible()) {
+                overlayController.hideAll()
+            }
+            return
         }
 
         val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockNotificationShade()
@@ -125,7 +191,73 @@ class DetoxAccessibilityService : AccessibilityService() {
 
         interceptDisallowedApp(
             packageName = packageName,
-            collapseFreeformAndSidebars = true
+            collapseFreeformAndSidebars = isSettingsOrInstallerPackage(packageName)
+        )
+    }
+
+    private fun syncOverlaysInternal() {
+        if (!::repository.isInitialized || !::overlayController.isInitialized) return
+        val remaining = repository.computeRemainingMs()
+        val snap = repository.getCurrentSnapshot()
+
+        if (!snap.isActive || remaining <= 0L || isDeviceLocked() || isPowerOrSafeDialogVisible()) {
+            overlayController.hideAll()
+            return
+        }
+
+        val shouldYieldForCall = when (snap.mode) {
+            DetoxMode.PHONE_ONLY -> isCallRingingOrActive() || lastObservedAppPackage in EMERGENCY_CORE_PACKAGES
+            DetoxMode.TOTAL_VACUUM -> isActiveVoiceCall() || lastObservedAppPackage in EMERGENCY_CORE_PACKAGES
+        }
+        if (shouldYieldForCall) {
+            overlayController.hidePersistentCurtain()
+            overlayController.updateTopStatusBarShield(
+                shouldShow = false,
+                blockNotifications = false,
+                blockControlCenter = false
+            )
+            return
+        }
+
+        val blockNotifications = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockNotificationShade()
+        val blockControlCenter = snap.mode == DetoxMode.TOTAL_VACUUM || repository.readBlockControlCenter()
+
+        if (snap.mode == DetoxMode.TOTAL_VACUUM && !MainActivity.isWithinPinningGrace()) {
+            // Monolithic full-screen lock curtain: zero animations, zero swipe-away, zero Control Center tap-through
+            overlayController.updateTopStatusBarShield(
+                shouldShow = true,
+                blockNotifications = true,
+                blockControlCenter = true
+            )
+            overlayController.showOrUpdatePersistentCurtain(
+                mode = DetoxMode.TOTAL_VACUUM,
+                remainingMs = remaining,
+                totalDurationMs = snap.totalDurationMs,
+                plannedEndWallMs = snap.plannedEndWallMs
+            )
+        } else {
+            overlayController.hidePersistentCurtain()
+            overlayController.updateTopStatusBarShield(
+                shouldShow = !MainActivity.isWithinPinningGrace(),
+                blockNotifications = blockNotifications,
+                blockControlCenter = blockControlCenter
+            )
+        }
+    }
+
+    private fun flashMonolithicShieldNow(durationMs: Long = 440L) {
+        if (!::overlayController.isInitialized || !::repository.isInitialized) return
+        if (isDeviceLocked() || MainActivity.isWithinPinningGrace() || isPowerOrSafeDialogVisible()) return
+        val snap = repository.getCurrentSnapshot()
+        if (!snap.isActive) return
+        val remaining = repository.computeRemainingMs()
+        if (remaining <= 0L) return
+        overlayController.flashTransientShield(
+            mode = snap.mode,
+            remainingMs = remaining,
+            totalDurationMs = snap.totalDurationMs,
+            plannedEndWallMs = snap.plannedEndWallMs,
+            durationMs = durationMs
         )
     }
 
@@ -182,10 +314,6 @@ class DetoxAccessibilityService : AccessibilityService() {
         return false
     }
 
-    /**
-     * Inspects live TYPE_SYSTEM windows to detect Notification Shade and/or Control Center
-     * respecting granular user toggles (both unconditionally enforced in TOTAL_VACUUM).
-     */
     private fun hasDisallowedSystemPanelWindow(
         blockNotifications: Boolean,
         blockControlCenter: Boolean
@@ -198,7 +326,7 @@ class DetoxAccessibilityService : AccessibilityService() {
 
         val dm = resources.displayMetrics
         val minShadeWidth = (dm.widthPixels * 0.50f).toInt()
-        val minShadeHeight = (dm.heightPixels * 0.28f).toInt()
+        val minShadeHeight = (dm.heightPixels * 0.25f).toInt()
         val rect = Rect()
 
         for (win in currentWindows) {
@@ -212,7 +340,6 @@ class DetoxAccessibilityService : AccessibilityService() {
             if (blockControlCenter && matchesControlCenter) return true
             if (blockNotifications && matchesNotifications) return true
 
-            // When BOTH are blocked (including TOTAL_VACUUM), catch any large unlabeled SystemUI panel
             if (blockNotifications && blockControlCenter) {
                 win.getBoundsInScreen(rect)
                 if (rect.width() >= minShadeWidth && rect.height() >= minShadeHeight) {
@@ -221,6 +348,13 @@ class DetoxAccessibilityService : AccessibilityService() {
             }
         }
         return false
+    }
+
+    private fun hasAnySystemPanelWindow(): Boolean {
+        return hasDisallowedSystemPanelWindow(
+            blockNotifications = true,
+            blockControlCenter = true
+        )
     }
 
     private fun isControlCenterMeta(lowerMeta: String): Boolean {
@@ -248,20 +382,16 @@ class DetoxAccessibilityService : AccessibilityService() {
         for (win in currentWindows) {
             if (win.type != AccessibilityWindowInfo.TYPE_SYSTEM) continue
             val title = win.title?.toString()?.lowercase().orEmpty()
-            if (isSafeSystemTitle(title)) {
+            if (isPowerDialogMeta(title)) {
                 return true
             }
         }
         return false
     }
 
-    private fun isSafeSystemTitle(lowerText: String): Boolean {
+    private fun isPowerDialogMeta(lowerText: String): Boolean {
         if (lowerText.isBlank()) return false
-        return lowerText.contains("keyguard") ||
-            lowerText.contains("bouncer") ||
-            lowerText.contains("volume") ||
-            lowerText.contains("громкост") ||
-            lowerText.contains("globalactions") ||
+        return lowerText.contains("globalactions") ||
             lowerText.contains("power") ||
             lowerText.contains("shutdown") ||
             lowerText.contains("reboot") ||
@@ -270,9 +400,18 @@ class DetoxAccessibilityService : AccessibilityService() {
             lowerText.contains("перезагруз") ||
             lowerText.contains("emergency") ||
             lowerText.contains("экстрен") ||
-            lowerText.contains("toast") ||
             lowerText.contains("pin") ||
             lowerText.contains("закреп")
+    }
+
+    private fun isSafeSystemTitle(lowerText: String): Boolean {
+        if (lowerText.isBlank()) return false
+        return lowerText.contains("keyguard") ||
+            lowerText.contains("bouncer") ||
+            lowerText.contains("volume") ||
+            lowerText.contains("громкост") ||
+            lowerText.contains("toast") ||
+            isPowerDialogMeta(lowerText)
     }
 
     private fun handleSystemUiEvent(
@@ -290,12 +429,12 @@ class DetoxAccessibilityService : AccessibilityService() {
         val pkgLower = event.packageName?.toString()?.lowercase().orEmpty()
         val combinedMeta = "$pkgLower $lowerClass $eventText $descText"
 
-        // Never interfere with lockscreen, volume slider, power dialog, emergency dialer, or toasts
         if (isSafeSystemTitle(combinedMeta)) return
 
         val isRecents = lowerClass.contains("recents") || lowerClass.contains("overview")
         if (isRecents) {
-            collapseAndRestoreLockScreen()
+            flashMonolithicShieldNow(durationMs = 460L)
+            collapseAndRestoreLockScreen(useHomeAction = false)
             return
         }
 
@@ -325,6 +464,8 @@ class DetoxAccessibilityService : AccessibilityService() {
         if (now - lastShadeDismissElapsedMs < SHADE_DISMISS_COOLDOWN_MS) return
         lastShadeDismissElapsedMs = now
 
+        // Instantly drop an opaque touch-eating curtain so Hotspot / tiles CANNOT be tapped even mid-swipe
+        flashMonolithicShieldNow(durationMs = 520L)
         dismissShadeOnce()
         if (restoreLockScreen) {
             bringLockScreenNowAndConfirm()
@@ -351,9 +492,10 @@ class DetoxAccessibilityService : AccessibilityService() {
             !MainActivity.isLockWindowFocused && !allowedDialerOrCall
 
         if (panelVisible || unfocusedAndBothBlocked) {
+            flashMonolithicShieldNow(durationMs = 420L)
             dismissShadeOnce()
             if (!allowedDialerOrCall) {
-                bringLockScreenDelayed(delayMs = 50L)
+                bringLockScreenDelayed(delayMs = 40L)
             }
         }
     }
@@ -365,19 +507,18 @@ class DetoxAccessibilityService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
-    /**
-     * Zero-latency escape interception: brings MainActivity back and collapses overlays FIRST,
-     * then records bypass count asynchronously so SharedPreferences disk commit never adds lag.
-     */
     private fun interceptDisallowedApp(packageName: String, collapseFreeformAndSidebars: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRedirectElapsedMs < REDIRECT_COOLDOWN_MS) return
         lastRedirectElapsedMs = now
 
-        // 1. Immediate UI recovery (0ms)
-        if (collapseFreeformAndSidebars || isSettingsOrInstallerPackage(packageName)) {
-            collapseAndRestoreLockScreen()
+        // 1. Instant zero-animation monolithic shield so user sees NO closing/reopening bounce
+        flashMonolithicShieldNow(durationMs = 460L)
+
+        if (collapseFreeformAndSidebars) {
+            collapseAndRestoreLockScreen(useHomeAction = true)
         } else {
+            // Direct no-animation return without flashing the Home screen
             bringLockScreenNowAndConfirm()
         }
 
@@ -401,20 +542,21 @@ class DetoxAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun collapseAndRestoreLockScreen() {
+    private fun collapseAndRestoreLockScreen(useHomeAction: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
-        performGlobalAction(GLOBAL_ACTION_HOME)
-        // Fire immediately AND schedule a quick follow-up after WM transition settles
+        if (useHomeAction) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
         relaunchLockRunnable.run()
-        bringLockScreenDelayed(delayMs = 95L)
+        bringLockScreenDelayed(delayMs = 90L)
     }
 
     private fun bringLockScreenNowAndConfirm() {
         relaunchLockRunnable.run()
-        bringLockScreenDelayed(delayMs = 80L)
+        bringLockScreenDelayed(delayMs = 75L)
     }
 
     private fun bringLockScreenDelayed(delayMs: Long) {
@@ -454,6 +596,12 @@ class DetoxAccessibilityService : AccessibilityService() {
             am.mode == AudioManager.MODE_IN_COMMUNICATION
     }
 
+    private fun isActiveVoiceCall(): Boolean {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        return am.mode == AudioManager.MODE_IN_CALL ||
+            am.mode == AudioManager.MODE_IN_COMMUNICATION
+    }
+
     private fun isSettingsOrInstallerPackage(pkg: String): Boolean {
         val lower = pkg.lowercase()
         return lower == "com.android.settings" ||
@@ -473,6 +621,13 @@ class DetoxAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         mainHandler.removeCallbacks(relaunchLockRunnable)
         mainHandler.removeCallbacks(shadeVerifyRunnable)
+        if (::overlayController.isInitialized) {
+            overlayController.hideAll()
+        }
+        if (screenReceiverRegistered) {
+            runCatching { unregisterReceiver(screenStateReceiver) }
+            screenReceiverRegistered = false
+        }
         if (activeInstance?.get() === this) {
             activeInstance = null
         }
@@ -499,13 +654,25 @@ class DetoxAccessibilityService : AccessibilityService() {
             "com.android.server.telecom",
             "com.android.phone"
         )
-        private val SHADE_VERIFY_DELAYS_MS = longArrayOf(140L, 340L, 640L)
+        private val SHADE_VERIFY_DELAYS_MS = longArrayOf(120L, 300L, 580L)
         private const val REDIRECT_COOLDOWN_MS = 90L
-        private const val SHADE_DISMISS_COOLDOWN_MS = 80L
+        private const val SHADE_DISMISS_COOLDOWN_MS = 70L
         private const val BYPASS_COUNT_COOLDOWN_MS = 2_500L
 
         @Volatile
         private var activeInstance: WeakReference<DetoxAccessibilityService>? = null
+
+        fun syncOverlaysNow() {
+            val service = activeInstance?.get() ?: return
+            service.mainHandler.post { service.syncOverlaysInternal() }
+        }
+
+        fun clearOverlaysNow() {
+            val service = activeInstance?.get() ?: return
+            if (service::overlayController.isInitialized) {
+                service.overlayController.hideAll()
+            }
+        }
 
         fun onLockWindowLostFocus() {
             val service = activeInstance?.get() ?: return
@@ -522,7 +689,8 @@ class DetoxAccessibilityService : AccessibilityService() {
                 service.repository.readBlockControlCenter()
 
             if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
-                service.collapseAndRestoreLockScreen()
+                service.flashMonolithicShieldNow(durationMs = 460L)
+                service.collapseAndRestoreLockScreen(useHomeAction = true)
                 return
             }
 
@@ -530,12 +698,21 @@ class DetoxAccessibilityService : AccessibilityService() {
                 service.hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
             ) {
                 service.triggerShadeCollapseBurst(restoreLockScreen = true)
+            } else if (!service.hasAnySystemPanelWindow()) {
+                service.flashMonolithicShieldNow(durationMs = 400L)
+                service.bringLockScreenNowAndConfirm()
             }
         }
 
         fun enforceWatchdogCheck() {
             val service = activeInstance?.get() ?: return
-            if (!service::repository.isInitialized || !service.repository.isSessionActive()) return
+            if (!service::repository.isInitialized || !service.repository.isSessionActive()) {
+                clearOverlaysNow()
+                return
+            }
+
+            service.syncOverlaysInternal()
+
             if (service.isDeviceLocked() || MainActivity.isWithinPinningGrace()) return
             if (service.isPowerOrSafeDialogVisible()) return
 
@@ -547,7 +724,10 @@ class DetoxAccessibilityService : AccessibilityService() {
                 service.repository.readBlockControlCenter()
 
             if (service.hasDisallowedFloatingOrSplitWindow(snap.mode)) {
-                service.mainHandler.post { service.collapseAndRestoreLockScreen() }
+                service.mainHandler.post {
+                    service.flashMonolithicShieldNow(durationMs = 460L)
+                    service.collapseAndRestoreLockScreen(useHomeAction = true)
+                }
                 return
             }
 
@@ -555,16 +735,16 @@ class DetoxAccessibilityService : AccessibilityService() {
                 service.hasDisallowedSystemPanelWindow(blockNotifications, blockControlCenter)
             ) {
                 service.mainHandler.post {
+                    service.flashMonolithicShieldNow(durationMs = 440L)
                     service.dismissShadeOnce()
                     if (!allowedDialerOrCall) {
-                        service.bringLockScreenDelayed(delayMs = 50L)
+                        service.bringLockScreenDelayed(delayMs = 40L)
                     }
                 }
                 return
             }
 
             if (!MainActivity.isLockWindowFocused && !allowedDialerOrCall) {
-                // Only force back when not intentionally viewing an allowed panel (e.g. notifications allowed in PHONE_ONLY)
                 val bothBlocked = blockNotifications && blockControlCenter
                 val leftToOtherApp = service.lastObservedAppPackage != null &&
                     service.lastObservedAppPackage != service.applicationContext.packageName
@@ -583,6 +763,9 @@ class DetoxAccessibilityService : AccessibilityService() {
             val service = activeInstance?.get() ?: return false
             val repo = DetoxSessionRepository.getInstance(service.applicationContext)
             if (repo.isSessionActive()) return false
+            if (service::overlayController.isInitialized) {
+                service.overlayController.hideAll()
+            }
             return runCatching {
                 service.disableSelf()
                 true

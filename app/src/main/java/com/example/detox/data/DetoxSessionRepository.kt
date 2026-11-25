@@ -20,7 +20,6 @@ import androidx.core.content.edit
 import com.example.detox.admin.DetoxDeviceAdminReceiver
 import com.example.detox.service.DetoxAccessibilityService
 import com.example.detox.service.DetoxMonitorService
-import com.example.detox.service.DetoxSystemDisplayController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,11 +58,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         val bootCount = readBootCount()
 
         val (dndApplied, previousFilter) = applyDndIfPermitted(mode)
-        val displayOverride = if (mode == DetoxMode.TOTAL_VACUUM) {
-            DetoxSystemDisplayController.applyStrictMonochromeAndDisableAod(appContext)
-        } else {
-            DetoxSystemDisplayController.DisplayOverrideSnapshot()
-        }
 
         val snapshot = DetoxSessionSnapshot(
             isActive = true,
@@ -78,11 +72,7 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             timeTamperDetected = false,
             bypassAttempts = 0,
             dndApplied = dndApplied,
-            previousInterruptionFilter = previousFilter,
-            systemDisplayApplied = displayOverride.applied,
-            previousAodState = displayOverride.previousAodState,
-            previousDaltonizerEnabled = displayOverride.previousDaltonizerEnabled,
-            previousDaltonizerMode = displayOverride.previousDaltonizerMode
+            previousInterruptionFilter = previousFilter
         )
 
         writeSnapshotSynchronously(snapshot)
@@ -246,13 +236,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         if (!snap.isActive) return null
 
         restoreDndIfApplied(snap)
-        DetoxSystemDisplayController.restorePreviousSettings(
-            context = appContext,
-            applied = snap.systemDisplayApplied,
-            previousAodState = snap.previousAodState,
-            previousDaltonizerEnabled = snap.previousDaltonizerEnabled,
-            previousDaltonizerMode = snap.previousDaltonizerMode
-        )
 
         val summary = CompletedSessionSummary(
             durationMs = snap.totalDurationMs,
@@ -464,11 +447,7 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             timeTamperDetected = prefs.getBoolean(KEY_TIME_TAMPER, false),
             bypassAttempts = prefs.getInt(KEY_BYPASS_ATTEMPTS, 0),
             dndApplied = prefs.getBoolean(KEY_DND_APPLIED, false),
-            previousInterruptionFilter = prefs.getInt(KEY_PREV_INTERRUPTION_FILTER, -1),
-            systemDisplayApplied = prefs.getBoolean(KEY_SYS_DISPLAY_APPLIED, false),
-            previousAodState = prefs.getInt(KEY_PREV_AOD_STATE, -1),
-            previousDaltonizerEnabled = prefs.getInt(KEY_PREV_DALTONIZER_ENABLED, -1),
-            previousDaltonizerMode = prefs.getInt(KEY_PREV_DALTONIZER_MODE, -1)
+            previousInterruptionFilter = prefs.getInt(KEY_PREV_INTERRUPTION_FILTER, -1)
         )
     }
 
@@ -487,10 +466,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
             putInt(KEY_BYPASS_ATTEMPTS, snap.bypassAttempts)
             putBoolean(KEY_DND_APPLIED, snap.dndApplied)
             putInt(KEY_PREV_INTERRUPTION_FILTER, snap.previousInterruptionFilter)
-            putBoolean(KEY_SYS_DISPLAY_APPLIED, snap.systemDisplayApplied)
-            putInt(KEY_PREV_AOD_STATE, snap.previousAodState)
-            putInt(KEY_PREV_DALTONIZER_ENABLED, snap.previousDaltonizerEnabled)
-            putInt(KEY_PREV_DALTONIZER_MODE, snap.previousDaltonizerMode)
         }
     }
 
@@ -517,10 +492,6 @@ class DetoxSessionRepository private constructor(private val appContext: Context
         private const val KEY_BYPASS_ATTEMPTS = "bypass_attempts"
         private const val KEY_DND_APPLIED = "dnd_applied"
         private const val KEY_PREV_INTERRUPTION_FILTER = "prev_interruption_filter"
-        private const val KEY_SYS_DISPLAY_APPLIED = "sys_display_applied"
-        private const val KEY_PREV_AOD_STATE = "prev_aod_state"
-        private const val KEY_PREV_DALTONIZER_ENABLED = "prev_daltonizer_enabled"
-        private const val KEY_PREV_DALTONIZER_MODE = "prev_daltonizer_mode"
         private const val KEY_PREFERRED_DURATION_MIN = "pref_duration_min"
         private const val KEY_PREFERRED_MODE = "pref_mode"
         private const val KEY_BLOCK_NOTIFICATION_SHADE = "pref_block_notification_shade"

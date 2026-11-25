@@ -75,7 +75,14 @@ class MainActivity : ComponentActivity() {
                     onDismissConfirmSheet = viewModel::dismissConfirmSheet,
                     onConfirmLock = {
                         viewModel.confirmAndStartSession()
-                        requestScreenPinning()
+                        suppressTransitions()
+                        if (uiState.selectedMode == DetoxMode.PHONE_ONLY) {
+                            requestScreenPinning()
+                        } else {
+                            // In TOTAL_VACUUM the monolithic Accessibility overlay locks the viewport immediately without a pinning popup delay
+                            pinningGraceUntilElapsedMs = 0L
+                            DetoxAccessibilityService.syncOverlaysNow()
+                        }
                     },
                     onRequestPinScreen = { requestScreenPinning() },
                     onOpenDialer = { launchDialer() },
@@ -108,20 +115,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
+            suppressTransitions()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         viewModel.onHostResumed(isCurrentlyPinned())
-        isLockWindowFocused = hasWindowFocus() && viewModel.uiState.value.screen == DetoxScreen.ActiveLock
+        val inActiveLock = viewModel.uiState.value.screen == DetoxScreen.ActiveLock
+        isLockWindowFocused = hasWindowFocus() && inActiveLock
+        if (inActiveLock) {
+            suppressTransitions()
+            DetoxAccessibilityService.syncOverlaysNow()
+        }
     }
 
     override fun onPause() {
         isLockWindowFocused = false
+        if (viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
+            suppressTransitions()
+        }
         super.onPause()
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (viewModel.uiState.value.screen == DetoxScreen.ActiveLock) {
+            suppressTransitions()
             val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
             val locked = km?.isKeyguardLocked == true
             if (!locked && !isWithinPinningGrace() && !isWithinDialerGrace()) {
@@ -134,12 +157,25 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         val inActiveLock = viewModel.uiState.value.screen == DetoxScreen.ActiveLock
         isLockWindowFocused = hasFocus && inActiveLock
-        if (!hasFocus && inActiveLock) {
+        if (hasFocus && inActiveLock) {
+            pinningGraceUntilElapsedMs = 0L
+            DetoxAccessibilityService.syncOverlaysNow()
+        } else if (!hasFocus && inActiveLock) {
             val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
             val locked = km?.isKeyguardLocked == true
             if (!locked && !isWithinPinningGrace() && !isWithinDialerGrace()) {
                 DetoxAccessibilityService.onLockWindowLostFocus()
             }
+        }
+    }
+
+    private fun suppressTransitions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, 0, 0)
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+        } else {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
         }
     }
 

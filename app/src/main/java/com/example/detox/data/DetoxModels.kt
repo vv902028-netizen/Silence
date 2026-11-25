@@ -18,11 +18,7 @@ data class DetoxSessionSnapshot(
     val timeTamperDetected: Boolean = false,
     val bypassAttempts: Int = 0,
     val dndApplied: Boolean = false,
-    val previousInterruptionFilter: Int = -1,
-    val systemDisplayApplied: Boolean = false,
-    val previousAodState: Int = -1,
-    val previousDaltonizerEnabled: Int = -1,
-    val previousDaltonizerMode: Int = -1
+    val previousInterruptionFilter: Int = -1
 )
 
 data class ProtectionStatus(
